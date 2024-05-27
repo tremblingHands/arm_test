@@ -1,0 +1,445 @@
+def mount_onescoket_disk(){
+  sh """
+      cpu_vendor=\$(dmidecode -t processor | grep 'Manufacturer'|uniq)
+      if [[ "\$cpu_vendor" =~ "AMD" ]]; then
+         echo "mount AMD"
+         if [[ \$(lsof -t "/dev/nvme1n1") ]]; then
+            lsof -t "/dev/nvme1n1" |xargs kill -9
+         fi
+         if [[ \$(lsof -t "/dev/nvme0n1") ]]; then
+            lsof -t "/dev/nvme0n1" |xargs kill -9
+         fi
+         if [[ \$(lsof -t "/dev/nvme3n1") ]]; then
+            lsof -t "/dev/nvme3n1" |xargs kill -9
+         fi
+         sleep 30
+         if [ -e /data1 ]; then
+            umount /data1 ||true
+            rm -rf /data1
+         fi
+         if [ -e /data2 ]; then
+            umount /data2 ||true
+            rm -rf /data2
+         fi
+         if [ -e /data3 ]; then
+            umount /data3 ||true
+            rm -rf /data3
+         fi 
+        mkfs.ext4  -F /dev/nvme0n1
+        mkfs.ext4  -F /dev/nvme1n1
+        mkfs.ext4  -F /dev/nvme3n1
+        mkdir /data1 /data2 /data3
+        mount /dev/nvme0n1 /data1
+        mount /dev/nvme1n1 /data2
+        mount /dev/nvme3n1 /data3
+      elif [[ "\$cpu_vendor" =~ "Ampere" ]]; then
+         if [[ \$(lsof -t "/dev/nvme1n1") ]]; then
+            lsof -t "/dev/nvme1n1" |xargs kill -9
+         fi
+         if [[ \$(lsof -t "/dev/nvme0n1") ]]; then
+            lsof -t "/dev/nvme0n1" |xargs kill -9
+         fi
+         if [[ \$(lsof -t "/dev/nvme2n1") ]]; then
+            lsof -t "/dev/nvme2n1" |xargs kill -9
+         fi
+         sleep 30
+         if [ -e /data1 ]; then
+            umount /data1 ||true
+            rm -rf /data1
+         fi
+         if [ -e /data2 ]; then
+            umount /data2 ||true
+            rm -rf /data2
+         fi
+         if [ -e /data3 ]; then
+            umount /data3 ||true
+            rm -rf /data3
+         fi
+         mkfs.ext4  -F /dev/nvme1n1
+         mkfs.ext4  -F /dev/nvme2n1
+         mkfs.ext4  -F /dev/nvme0n1
+         mkdir /data1 /data2 /data3
+         mount /dev/nvme1n1 /data1
+         mount /dev/nvme2n1 /data2
+         mount /dev/nvme0n1 /data3
+      else
+         echo "hj01 to fill"
+      fi
+  """
+}
+
+def mount_twosocket_disk(){
+  sh """
+      cpu_vendor=\$(dmidecode -t processor | grep 'Manufacturer'|uniq)
+      if [[ \$cpu_vendor =~ "AMD" ]]; then
+         if [[ \$(lsof -t "/dev/nvme1n1") ]]; then
+            lsof -t "/dev/nvme1n1" |xargs kill -9
+         fi
+         if [[ \$(lsof -t "/dev/nvme3n1") ]]; then
+            lsof -t "/dev/nvme3n1" |xargs kill -9
+         fi
+         if [[ \$(lsof -t "/dev/nvme0n1") ]]; then
+            lsof -t "/dev/nvme0n1" |xargs kill -9
+         fi
+         if [ -e /data1 ]; then
+            lsof +D /data1|grep -v PID |awk '{print \$2}'|xargs kill -9 ||true
+            umount /data1 ||true
+            rm -rf /data1
+         fi
+         if [ -e /data2 ]; then
+            lsof +D /data2|grep -v PID |awk '{print \$2}'|xargs kill -9 ||true
+            umount /data2 ||true
+            rm -rf /data2
+         fi
+         if [ -e /data3 ]; then
+            lsof +D /data3|grep -v PID |awk '{print \$2}'|xargs kill -9 ||true
+            umount /data3 ||true
+            rm -rf /data3
+         fi
+         mkfs.ext4  -F /dev/nvme1n1
+         mkfs.ext4  -F /dev/nvme3n1
+         mkdir /data1 /data2
+         mount /dev/nvme1n1 /data1
+         mount /dev/nvme3n1 /data2
+         echo "AMD2 two socket datadir is prepared!!!!"
+      elif [[ \$cpu_vendor =~ "Ampere" ]]; then
+         if [[ \$(lsof -t "/dev/nvme1n1") ]]; then
+            lsof -t "/dev/nvme1n1" |xargs kill -9
+         fi
+         if [[ \$(lsof -t "/dev/nvme0n1") ]]; then
+            lsof -t "/dev/nvme0n1" |xargs kill -9
+         fi
+         if [[ \$(lsof -t "/dev/nvme2n1") ]]; then
+            lsof -t "/dev/nvme2n1" |xargs kill -9
+         fi
+         sleep 30
+         if [ -e /data1 ]; then
+            lsof +D /data1|grep -v PID |awk '{print \$2}'|xargs kill -9 ||true
+            umount /data1 ||true
+            rm -rf /data1
+         fi
+         if [ -e /data2 ]; then
+            lsof +D /data2|grep -v PID |awk '{print \$2}'|xargs kill -9 ||true
+            umount /data2 ||true
+            rm -rf /data2
+         fi
+         if [ -e /data3 ]; then
+            lsof +D /data3|grep -v PID |awk '{print \$2}'|xargs kill -9 ||true
+            umount /data3 ||true
+            rm -rf /data3
+         fi
+         mkfs.ext4  -F /dev/nvme1n1
+         mkfs.ext4  -F /dev/nvme0n1
+         mkdir /data1 /data2
+         mount /dev/nvme1n1 /data1
+         mount /dev/nvme0n1 /data2
+         echo "Ampere16 two socket datadir is prepared!!!!"                     
+      else
+        echo "hj01 to fill"
+      fi
+  """
+}
+
+def prepareTestEnv(socketNum, isNumaCtl){
+  sh """
+      cd /opt/modules/hadoop-3.4.0/etc/hadoop
+      rm -rf yarn-site.xml
+      ln -s yarn-site-${socketNum}.xml yarn-site.xml
+      if [[ ${isNumaCtl} = true ]]; then
+          cd /opt/modules/hadoop-3.4.0/sbin
+          rm -rf yarn-daemon.sh hadoop-daemon.sh
+          ln -s yarn-daemon-onesocket.sh yarn-daemon.sh
+          ln -s hadoop-daemon-onesocket.sh hadoop-daemon.sh
+      else
+        cd /opt/modules/hadoop-3.4.0/sbin
+        rm -rf yarn-daemon.sh hadoop-daemon.sh
+        ln -s hadoop-daemon-common.sh hadoop-daemon.sh 
+        ln -s yarn-daemon-common.sh yarn-daemon.sh
+      fi
+      cd /opt/modules/hadoop-3.4.0/sbin
+      rm -rf hadoop-daemon.sh
+      rm -rf yarn-daemon.sh
+      ln -s hadoop-daemon-common.sh hadoop-daemon.sh 
+      ln -s yarn-daemon-common.sh yarn-daemon.sh 
+      cd /opt/modules/hadoop-3.4.0
+      bin/hadoop namenode -format
+      sbin/start-all.sh
+      /opt/modules/hadoop-3.4.0/bin/hadoop fs -mkdir /home
+      /opt/modules/hadoop-3.4.0/bin/hadoop fs -mkdir /home/sparkhistory
+      cd /opt/modules/mysql
+      if [[ \$(ps -ef |grep mysqld |grep daemon) ]]; then
+        echo "mysqld is running"
+      else
+        bin/mysqld --defaults-file=conf/mysql-server.cnf --daemonize --user=root
+      fi
+      bin/mysql --defaults-file=conf/mysql-server.cnf -uroot -p"mysql" --connect-expired-password --execute="drop database hive;" ||true
+      cd /opt/modules/hive
+      ./bin/schematool -dbType mysql -initSchema
+      nohup ./bin/hive --service metastore &
+  """
+}
+
+def runTests(socketNum,taskNum,data,taskNames){
+  sh """
+      if [[ "${taskNames}" =~ "tpch" ]]; then
+          echo "start ${socketNum} socket TPCH"
+          cd /opt/modules/tpch
+          ./gendata_parquet.sh
+          echo "*****gendata finish****"
+          if ((${taskNum} < 2)); then
+            ./runtpch_parquet.sh
+            cd /opt/modules/results/${socketNum}socket-${taskNum}task-${data}t
+            /opt/modules/hadoop-3.4.0/bin/hadoop fs -get /tpch_parquet_reports .
+          else
+            start_time=\$(date +%s%N)
+            ./tt_runtpch_parquet.sh
+            end_time=\$(date +%s%N)
+            tpch_duration=\$(((end_time - start_time) / 1000000000))
+            echo \$tpch_duration >>/opt/modules/results/${socketNum}socket-${taskNum}task-${data}t/tt-tpch_parquet_report.txt
+            cd /opt/modules/results/${socketNum}socket-${taskNum}task-${data}t
+            /opt/modules/hadoop-3.4.0/bin/hadoop fs -get /tt-tpch_parquet_report2 .
+            /opt/modules/hadoop-3.4.0/bin/hadoop fs -get /tt-tpch_parquet_report1 .
+          fi
+          if ((${data} > 1)); then
+            cd /opt/modules/tpch
+            ./gendata_2t_parquet.sh
+            echo "*****gendata finish****"
+            ./runtpch_2t_parquet.sh
+            echo "****run two socket tpch finsh"
+            cd /opt/modules/results/2socket-1task-2t
+            /opt/modules/hadoop-3.4.0/bin/hadoop fs -get /tpch_parquet_reports .
+          fi
+          echo "****run ${socketNum} socket tpch finsh"
+          /opt/modules/hadoop-3.4.0/bin/hadoop fs -rm -r /home/tpch-gen-*
+      fi
+      if [[ "${taskNames}" =~ "tpcds" ]]; then
+          echo "start one socket TPCDS"
+          cd /opt/modules/tpcds
+          ./gendata_parquet.sh
+          echo "*****gendata finish****"
+          if ((${taskNum} < 2)); then
+            ./runtpcds_parquet.sh
+            cd /opt/modules/results/${socketNum}socket-${taskNum}task-${data}t
+            /opt/modules/hadoop-3.4.0/bin/hadoop fs -get /tpcds_parquet_reports .
+          else
+            start_time=\$(date +%s%N)
+            ./tt_runtpcds_parquet.sh
+            end_time=\$(date +%s%N)
+            tpch_duration=\$(((end_time - start_time) / 1000000000))
+            echo \$tpch_duration >>/opt/modules/results/${socketNum}socket-${taskNum}task-${data}t/tt-tpcds_parquet_report.txt
+            cd /opt/modules/results/${socketNum}socket-${taskNum}task-${data}t
+            /opt/modules/hadoop-3.4.0/bin/hadoop fs -get /tt-tpcds_parquet_report1 .
+            /opt/modules/hadoop-3.4.0/bin/hadoop fs -get /tt-tpcds_parquet_report2 .
+          fi
+          if ((${data} > 1)); then
+            cd /opt/modules/tpcds
+            ./gendata_2t_parquet.sh
+            echo "*****gendata finish****"
+            ./runtpcds_2t_parquet.sh
+            echo "****run two socket tpch finsh"
+            cd /opt/modules/results/2socket-1task-2t
+            /opt/modules/hadoop-3.4.0/bin/hadoop fs -get /tpcds_parquet_reports .
+          fi          
+          echo "****run ${socketNum} socket tpcds finsh"
+          /opt/modules/hadoop-3.4.0/bin/hadoop fs -rm -r /home/tpcds-gen-*
+      fi
+      if [[ "${taskNames}" =~ "terasort" ]]; then
+          echo "start terasort"
+          cd /opt/modules/terasort
+          ./gendata.sh
+          echo "*****gendata finish***"
+          if ((${taskNum} < 2)); then
+            ./run.sh
+            cd /opt/modules/results/${socketNum}socket-${taskNum}task-${data}t
+            /opt/modules/hadoop-3.4.0/bin/hadoop fs -get /terasort_report.txt .
+          else
+            start_time=\$(date +%s%N)
+            ./tt_run.sh
+            end_time=\$(date +%s%N)
+            terasort_duration=\$(((end_time - start_time) / 1000000000))
+            echo \$terasort_duration >>/opt/modules/results/${socketNum}socket-${taskNum}task-${data}t/tt-terasort_parquet_report.txt
+          fi
+          /opt/modules/hadoop-3.4.0/bin/hadoop fs -rm -r /terasort_in
+          /opt/modules/hadoop-3.4.0/bin/hadoop fs -rm -r /terasort_out
+          echo "****run ${socketNum} socket terasort finsh"
+      fi
+    """
+}
+
+
+pipeline {
+   agent {
+        label "vmware-190"
+   }
+   stages {
+      stage('ResetBIOS') {
+         steps{
+          script{
+             def deploy_nodes = params.deploy_nodes.split(' ')
+             for (server in deploy_nodes) {
+              stage(server){
+                  node(server) {
+                      echo "running on ${server}"
+                  }
+              }
+              stage(server){
+                 agent {label "vmware-190"}
+                 dir("scripts") {
+                            git credentialsId: 'Gitlab', url: 'git@10.1.2.8:appsoftware/scripts.git'
+                        }
+                 sh """
+                    cd scripts
+                    python3 bios/bios.py --ability common --server_ip ${server} --reboot true --attributes '{}'
+                    echo "Waiting for reboot"
+                    sleep 600s
+                    for i in {1..10}
+                    do
+                        {
+                            ping ${server} -c 3 && break 
+                        } || {
+                            sleep 120s 
+                        }
+                    done
+                 """
+              }
+
+             }
+
+          }
+          }
+      }
+       stage('tests') {
+         steps{
+           script{
+             def deploy_nodes = params.deploy_nodes.split(' ')
+             for (server in deploy_nodes) {
+                def server_stage = server + '_' + 'prepare'
+                def dt=sh(script: 'date +"%Y-%m-%d"', returnStdout: true).trim()
+                stage(server_stage){
+                  node(server) {
+                      sh '''
+                        cpu_vendor=$(lscpu|grep "Model name:"|grep -v BIOS |awk -F ':' '{print $2}'|tr -s ' ')
+                        arch=$(uname -m)
+                        echo "-----------------------------------------"
+                        echo "execute on $cpu_vendor"
+                        if [ ! -e ~/.ssh/id_rsa ]; then
+                          ssh-keygen -A
+                          ssh-keygen -t rsa -P '' -f ~/.ssh/id_rsa
+                          cat ~/.ssh/id_rsa.pub >> ~/.ssh/authorized_keys
+                          chmod 0600 ~/.ssh/authorized_keys
+                          echo "StrictHostKeyChecking no" >>/etc/ssh/ssh_config
+                        else
+                          echo "ssh id_rsa exits!"
+                        fi
+                        if [ ! -e /etc/alternatives/java_sdk ]; then
+                          yum install -y java-1.8.0-openjdk-devel
+                        else
+                          echo "openjdk8 exits!"
+                        fi
+                        yum  install -y libaio-devel numactl libevent libevent-devel
+                        yum install -y openssl-devel libtirpc libtirpc-devel protobuf*
+                        if grep hadoop1 /etc/hosts; then
+                          echo "Record for 'hadoop' found in /etc/hosts"
+                        else
+                           myip=$(hostname -I|awk -F " " '{print $1}')
+                           echo "$myip hadoop1" >>/etc/hosts
+                        fi
+                        if ps -ef |grep java|grep hadoop; then
+                           ps -ef |grep java|grep hadoop|awk '{print $2}'|xargs kill -9
+                        else
+                          echo "no hadoop process exits"
+                        fi
+                        if ps -ef |grep java|grep hive; then
+                           ps -ef |grep java|grep hive|awk '{print $2}'|xargs kill -9
+                        else
+                          echo "no hive process exits"
+                        fi
+                        if ps -ef |grep mysqld|grep daemonize; then
+                           ps -ef |grep mysqld|grep daemonize|awk '{print $2}'|xargs kill -9
+                        else
+                          echo "no mysqld process exits"
+                        fi
+                        if [ -e /var/lib/mysql-files ]; then
+                          rm -rf /var/lib/mysql-files
+                          mkdir /var/lib/mysql-files
+                        else
+                          mkdir /var/lib/mysql-files
+                        fi
+                        if [ -e /opt/modules ]; then
+                          rm -rf /opt/modules*
+                          cd /opt
+                          wget -q http://10.1.180.190/bigdata/spark/postsillicon/$arch/modules.tar.gz
+                          tar -zxvf modules.tar.gz > /dev/null
+                        else
+                          cd /opt
+                          wget -q http://10.1.180.190/bigdata/spark/postsillicon/$arch/modules.tar.gz
+                          tar -zxvf modules.tar.gz > /dev/null
+                        fi   
+                        echo "/opt/modules dir is prepared"
+                        ''' 
+                  }
+                }
+                stage('1socket-1task-1T'){
+                  node(server) {
+                          mount_onescoket_disk()
+                          echo "data dir is prepared"
+                          echo "deploy onesocket hadoop"
+                          prepareTestEnv("onesocket", true)
+                          runTests(1,1,1,'tpcds')
+                  }
+                }
+                stage('2socket-1task-1T'){
+                  node(server) {
+                        echo "---------------------------------------2socket-1task-1T------"
+                        mount_twosocket_disk()
+                        echo "data dir is prepared"
+                        echo "deploy 2socket-1task-1T hadoop"
+                        prepareTestEnv('onesocket', false)
+                        runTests(2,1,1,'tpcds')
+                  }
+                }
+                stage('2socket-2task-1T'){
+                  node(server) {
+                        echo "---------------------------------------2socket-2task-1T------"
+                        mount_twosocket_disk()
+                        echo "data dir is prepared"
+                        echo "deploy 2socket-2task-1T hadoop"
+                        prepareTestEnv('twosocket', false)
+                        runTests(2,2,1,'tpcds') || true
+                  }
+                }
+                stage('2socket-1task-2T'){
+                  node(server) {
+                      echo "---------------------------------------2socket-2task-1T------"
+                      mount_twosocket_disk()
+                      echo "data dir is prepared"
+                      echo "deploy 2socket-1task-2T hadoop"
+                      prepareTestEnv('twosocket', false)
+                      runTests(2,1,2,'tpcds') ||true
+                  }
+                }
+                stage('collect data to nas'){
+                  node(server) {
+                    sh '''
+                    dt_str=$(date +'%Y-%m-%d')
+                    current_ip=$(hostname -I|awk -F " " '{print $1}')
+                    mkdir -p /nas/jerry.zhan/postsillicon/results/$dt_str/$current_ip
+                    cp -r  /opt/modules/results  /nas//nas/jerry.zhan/postsillicon/results/$dt_str/$current_ip
+                    '''
+                  }
+                }
+                stage('write results into database'){
+                  node(server) {
+                    sh """
+                    cd /opt/modules/
+                    java -jar postsilicon-result-jar-with-dependencies.jar /opt/modules/results
+                    """
+                  }
+                }                
+
+             }
+           }
+         }
+       }
+    }
+}

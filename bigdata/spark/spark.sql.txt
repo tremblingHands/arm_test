@@ -1,0 +1,34 @@
+-- spark.terasort definition
+
+CREATE TABLE `terasort` (
+  `ip` varchar(100) DEFAULT NULL,
+  `aarch` varchar(100) DEFAULT NULL,
+  `used_time` float DEFAULT NULL,
+  `dt` datetime DEFAULT NULL,
+  `query` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci DEFAULT NULL,
+  `task_name` varchar(100) DEFAULT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+
+-- spark.tpcds definition
+
+CREATE TABLE `tpcds` (
+  `query` varchar(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL,
+  `used_time` float DEFAULT NULL,
+  `dt` datetime DEFAULT NULL,
+  `ip` varchar(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci DEFAULT NULL,
+  `aarch` varchar(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci DEFAULT NULL,
+  `task_name` varchar(100) DEFAULT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+
+-- spark.tpch definition
+
+CREATE TABLE `tpch` (
+  `query` varchar(100) NOT NULL,
+  `used_time` float DEFAULT NULL,
+  `dt` datetime DEFAULT NULL,
+  `ip` varchar(100) DEFAULT NULL,
+  `aarch` varchar(100) DEFAULT NULL,
+  `task_name` varchar(100) DEFAULT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
