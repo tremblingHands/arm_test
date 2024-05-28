@@ -1,0 +1,100 @@
+pipeline {
+    agent {
+        label "vmware-190"
+    }
+    stages {
+         stage('Prepare Environment') {
+            agent {label "vmware-190"}
+            steps{
+                script{
+                    sh """
+                        cpu_vendor=\$(lscpu|grep 'Model name:'|grep -v BIOS |awk -F ':' '{print \$2}'|tr -s ' ')
+                        arch=\$(uname -m)
+                        echo '-----------------------------------------'
+                        echo 'execute on \$cpu_vendor'
+                        if [ ! -e ~/.ssh/id_rsa ]; then
+                            ssh-keygen -A
+                            ssh-keygen -t rsa -P '' -f ~/.ssh/id_rsa
+                            cat ~/.ssh/id_rsa.pub >> ~/.ssh/authorized_keys
+                            chmod 0600 ~/.ssh/authorized_keys
+                            echo 'StrictHostKeyChecking no' >>/etc/ssh/ssh_config
+                        else
+                            echo 'ssh id_rsa exits!'
+                        fi
+
+                        if ! grep -q 'Ampere' /etc/hosts; then
+                          curl -s http://10.1.180.190/hosts | cat >> /etc/hosts
+                        fi
+
+                        local=\$(hostname)
+                        ssh-copy-id root@\$local
+
+                        for client in ${params.clients}; do
+                            ssh-copy-id root@\$client
+                            ssh root@\$client \"wget -q http://gitlab.hj-micro.com/ceph/cbt/-/raw/master/setup.sh && sh setup.sh\"
+                        done
+
+                        for server in ${params.servers}; do
+                            ssh-copy-id root@\$server
+                            ssh root@\$server \"wget -q http://gitlab.hj-micro.com/ceph/cbt/-/raw/master/setup.sh && sh setup.sh\"
+                        done
+                    """
+                }
+            }
+        }
+        stage('ResetBIOS') {
+            steps{
+                script{
+                    def servers = params.servers.split(' ').toList()
+                    def clients = params.clients.split(' ').toList()
+                    def deploy_nodes = servers + clients
+                    deploy_nodes.unique()
+                    for (server in deploy_nodes) {
+                        stage(server){
+                            node(server) {
+                                echo "running on ${server}"
+                            }
+                        }
+                        stage(server){
+                            agent {label "vmware-190"}
+                            dir("scripts") {
+                                git credentialsId: 'Gitlab', url: 'git@gitlab.hj-micro.com:appsoftware/scripts.git'
+                            }
+                            sh """
+                               cd scripts
+                               python3 bios/bios.py --ability common --server_ip ${server} --reboot true --attributes '{}'
+                               echo "Waiting for reboot"
+                               sleep 600s
+                               for i in {1..10}
+                               do
+                                   {
+                                       ping ${server} -c 3 && break 
+                                   } || {
+                                       sleep 120s 
+                                   }
+                               done
+                            """
+                        }
+                    }
+                }
+            }
+        }
+       stage('Run Benchmark') {
+            agent {label "vmware-190"}
+            steps {
+                script{
+                    sh """
+                        git clone http://gitlab.hj-micro.com/ceph/cbt.git /opt/cbt
+                        cd /opt/cbt && sh setup.sh
+                        ./test -j allinone -b rbdfio -c "${params.clients}" -s "${params.servers}" -m bw
+                        ./stop_all.sh
+                        cd -
+                        rm -rf /opt/cbt
+                    """
+                }
+
+                archiveArtifacts artifacts: 'cbt/target/*.tar.gz', fingerprint: true
+            }
+        }
+    }
+}
