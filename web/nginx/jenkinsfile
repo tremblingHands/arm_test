@@ -1,0 +1,167 @@
+pipeline {
+    agent {
+        label "vmware-190"
+        }
+    environment {
+        server =  "$params.server"
+        client =  "$params.client"
+        nic_name=  "$params.nic_name"
+    }
+    //前提条件： 节点需要在Jenkins上托管，可连接
+	stages {
+	    stage('reinstall') {
+	        steps {
+	            script {
+	                try {
+	                    node(server) {
+	                        // 检查是否是CentOS8系统，如果不是则抛出异常
+                            sh 'cat /etc/os-release | grep "CentOS Stream 8"'
+                        }
+	                } catch (Exception e) {
+	                    //异常处理： 重装CentOS8
+	                    node("vmware-190") {
+                            dir("scripts") {
+                                git credentialsId: 'Gitlab', url: 'git@gitlab.hj-micro.com:appsoftware/scripts.git'
+                            }
+                            sh '''
+                                python3 scripts/bios/bios.py --ability reinstall --server_ip ${server} --reboot true --attributes 'CentOS8'
+                                echo "Waiting for reboot"
+                                sleep 1500s
+                                for i in {1..10}
+                                do
+                                    {
+                                        ping ${server} -c 3 && break 
+                                    } || {
+                                        sleep 120s 
+                                    }
+                                done
+                            '''
+                            // cobbler也用相同的业务IP，异常情况下，还在装机就Ping通然后往下
+                        }
+                    }
+                }
+            }
+        }
+        stage('kernel') {
+            steps {
+                script {
+                    try {
+                        node(server) {
+                        sh '''
+                        need_reboot=0
+                        node_num=`numactl -H|grep cpus:|wc -l`
+                        if [ $node_num -lt 4 ]; then  
+                            need_reboot=1
+                        fi
+                                
+                        if [[ "$(uname -a | grep 5.10)" == "" ]]
+                        then
+                            cd /
+                            bash install_kernel.sh
+                            need_reboot=1
+                        fi
+                        
+                        if [ $need_reboot -eq 1 ]; then 
+                            exit 1
+                        fi
+                        '''
+                        //节点重启自己会有流程异常，抛出exit 1到异常处理中有其他机器启动重启流程
+                            }
+                        } catch (Exception e) {
+                            node("vmware-190") {
+                                dir("scripts") {
+                                    git credentialsId: 'Gitlab', url: 'git@gitlab.hj-micro.com:appsoftware/scripts.git'
+                                }
+                                sh '''
+                                node_num=`numactl -H|grep cpus:|wc -l`
+                                if [ $node_num -lt 4 ]; then  
+                                    if lscpu | grep "Ampere" >/dev/null
+                                    then
+                                        #Ampere
+                                        python3 scripts/bios/bios.py --ability set --server_ip ${server} --reboot true --attributes '{\"CPU003\":\"CPU003Monolithic\"}'
+                                    fi
+                                    
+                                    if lscpu | grep "Intel" >/dev/null
+                                    then
+                                        #Intel
+                                        python3 scripts/bios/bios.py --ability set --server_ip ${server} --reboot true --attributes '{\"SubNumaCluster\":\"2-Way\"}'
+                                    fi
+                                    
+                                    if lscpu | grep "AMD" >/dev/null
+                                    then
+                                        #AMD
+                                        python3 scripts/bios/bios.py --ability set --server_ip ${server} --reboot true --attributes '{\"NumaNodesPerSocket\":\"4\"}'
+                                    fi
+                                    if lscpu | grep "Kunpeng" >/dev/null
+                                    then
+                                        #kunpeng
+                                        python3 scripts/bios/bios.py --ability set --server_ip ${server} --reboot true --attributes '{\"RankInterleaving\":\"4-way Interleave\"}'
+                                        python3 scripts/bios/bios.py --ability set --server_ip ${server} --reboot true --attributes '{\"NUMAEn\":\"Enabled\"}'
+                                    fi
+                                    need_reboot=1
+                                fi
+                                
+                                python3 scripts/bios/bios.py --ability reboot --server_ip ${server} --reboot true --attributes '{}'
+                                sleep 300s
+                                for i in {1..10}
+                                    do
+                                        {
+                                            ping ${server} -c 3 && break 
+                                        } || {
+                                            sleep 120s 
+                                        }
+                                    done
+                                '''
+                            }
+                        }
+                    }
+                }
+            }
+        stage('gcc') {
+            steps {
+                script {
+                    node(server) {
+                        sh '''
+                            yum install -y gcc-toolset-10-gcc
+     
+                        '''
+                    } 
+                }
+            }
+        }
+        stage('run') {
+			parallel {
+                stage('server_stage') {
+                    agent { label server } 
+                        steps {
+                        sh '''
+                            source /opt/rh/gcc-toolset-10/enable
+                            rm to_nginx* -rf
+                            wget -q http://10.1.180.190/web/nginx/to_nginx.tar.gz
+                            tar zxf to_nginx.tar.gz
+                            cd to_nginx
+                            ./setup.sh
+                            ./nginx.sh "${nic_name}" "${client}" all
+         
+                         '''
+                        }
+                }
+
+                stage('client_stage ') {
+                    agent { label client } 
+                        steps {
+                        sh '''
+                            rm wrk* -rf
+                            wget -q http://10.1.180.190/web/nginx/wrk.tar.gz
+                            tar zxf wrk.tar.gz
+                            cd wrk
+                            make -j
+                            ./wrk.sh "${server}" all
+         
+                         '''
+                        }
+                }
+            }
+	    }
+	}
+}
