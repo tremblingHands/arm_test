@@ -1,0 +1,105 @@
+pipeline {
+    agent {
+        label "vmware-190"
+    }
+    stages {
+        stage('Prepare Environment') {
+            agent { label "vmware-190" }
+            steps {
+                script {
+                    // 安装所需的软件包
+                    sh "yum install -y gcc-toolset-10 python38 perl cmake unzip bzip2 patch expect numactl php-cli php-xml php-json"
+                }
+            }
+        }
+        stage('Build FFmpeg') {
+            steps {
+                script {
+                    // 定义一个函数来构建FFmpeg
+                    def buildFFmpeg = {
+                        sh """
+                        source /opt/rh/gcc-toolset-10/enable
+                        NUM_CPU_CORES=\$(nproc)
+
+                        cd \$HOME
+
+                        # 确保FFmpeg目录存在
+                        if [ ! -d "\$FFMPEG_DIR" ]; then
+                            mkdir -p ffmpeg_
+
+                            # 下载和编译FFmpeg及其依赖项的逻辑
+                            wget -qO- http://10.1.180.190/videocodec/ffmpeg/ffmpeg-7.0.tar.xz | tar -xJf -
+                            wget -qO- http://10.1.180.190/videocodec/ffmpeg/x264-7ed753b10a61d0be95f683289dfb925b800b0676.zip | unzip -o
+                            wget -qO- http://10.1.180.190/videocodec/ffmpeg/x265_3.6.tar.gz | tar -xzf -
+                            wget -qO- http://10.1.180.190/videocodec/ffmpeg/vbench-02.zip | unzip -o
+
+                            # 编译安装nasm和yasm
+                            wget -qO- http://10.1.180.190/videocodec/ffmpeg/nasm-2.16.03.tar.gz | tar -xzf -
+                            cd nasm-2.16.03 && ./configure && make -j \$NUM_CPU_CORES && make install && cd -
+                            wget -qO- http://10.1.180.190/videocodec/ffmpeg/yasm-1.3.0.tar.gz | tar -xzf -
+                            cd yasm-1.3.0 && ./configure && make -j \$NUM_CPU_CORES && make install && cd -
+
+                            # 编译安装x264和x265
+                            cd x264-7ed753b10a61d0be95f683289dfb925b800b0676
+                            ./configure --prefix=\$HOME/ffmpeg_ --enable-static --enable-lto --enable-pic
+                            make -j \$NUM_CPU_CORES
+                            make install
+                            cd -
+
+                            cd x265_3.6/build
+                            cmake ../source/ -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=\$HOME/ffmpeg_
+                            make -j \$NUM_CPU_CORES
+                            make install
+                            cd -
+
+                            # 编译安装FFmpeg
+                            cd ffmpeg-7.0
+                            ./configure --disable-zlib --disable-doc --prefix=\$HOME/ffmpeg_ --extra-cflags="-I\$HOME/ffmpeg_/include" --extra-ldflags="-L\$HOME/ffmpeg_/lib -ldl" --bindir="\$HOME/ffmpeg_/bin" --pkg-config-flags="--static" --enable-gpl --enable-libx264 --enable-libx265
+                            make -j \$NUM_CPU_CORES
+                            if [ \$? -ne 0 ]; then
+                                echo "FFmpeg installation failed!"
+                                exit 1
+                            fi
+                            make install
+                            cd -
+                        fi
+                        """
+                    }
+                    buildFFmpeg()
+                }
+            }
+        }
+        stage('Run Benchmark') {
+            agent { label "vmware-190" }
+            steps {
+                script {
+                    // 运行基准测试
+                    sh """
+                    cd \$HOME
+                    alias python3=python3.8
+                    echo 3 > /proc/sys/vm/drop_caches
+                    echo always > /sys/kernel/mm/transparent_hugepage/enabled
+
+                    export PATH=\$HOME/ffmpeg_/bin:\$PATH
+                    export LD_LIBRARY_PATH=\$HOME/ffmpeg_/lib/:\$LD_LIBRARY_PATH
+
+                    # 运行基准测试脚本
+                    VBENCH_ROOT=\$HOME/vbench/ python3 vbench/code/post-silicon-test.py --output_dir=/tmp --encoder=libx265 --socket_id='1' --ffmpeg_dir=\$HOME/ffmpeg_/bin/ --mode=total   > total.log   2>&1
+                    VBENCH_ROOT=\$HOME/vbench/ python3 vbench/code/post-silicon-test.py --output_dir=/tmp --encoder=libx265 --socket_id='1' --ffmpeg_dir=\$HOME/ffmpeg_/bin/ --mode=scaling > scaling.log 2>&1
+                    """
+                }
+                post {
+                    always {
+                        // 无论基准测试成功与否，都执行归档
+                        archiveArtifacts artifacts: "$HOME/*.log, $HOME/results/*.csv", fingerprint: true
+                    }
+                }
+            }
+        }
+    }
+    post {
+        cleanup {
+            // cleanWs()
+        }
+    }
+}
