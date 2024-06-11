@@ -1,0 +1,527 @@
+pipeline {
+    agent {
+        label "vmware-190"
+    }
+    parameters {
+        string(name: 'MYSQL_DATA_DIR', defaultValue: '/var/lib/mysql', description: 'Directory for MySQL data')
+        string(name: 'POSTSILICON_DIR', defaultValue: '/jenkins/workstation/postsilicon', description: 'Directory for Post-Silicon workspace')
+        string(name: 'THREAD_COUNTS', defaultValue: '32, 64, 128', description: 'Thread counts for testing')
+        string(name: 'TEST_DURATION', defaultValue: '300', description: 'Test duration in seconds')
+        string(name: 'server_node', defaultValue: '10.1.180.13', description: 'server node')
+        string(name: 'client_node', defaultValue: '10.1.180.13', description: 'client node')
+        choice(name: 'cpuModel', choices: ['kunpeng920', 'AMD7763', 'Intel8352Y','AmpereAltraMax','Bergamo'], description: 'Select the CPU model')
+    }
+    stages {
+        stage('ServerEnvPrepare') {
+            agent { label "${server_node}" }
+            steps {
+                script {
+                    prepareServerEnvironment()
+                }
+            }
+        }
+        stage('ClientEnvPrepare') {
+            agent { label "${client_node}" }
+            steps {
+                script {
+                    prepareClientEnvironment()
+                }
+            }
+        }
+        stage('性能测试启动服务端') {
+            agent { label "${server_node}" }
+            steps {
+                script {
+                    startMySQLServer(params.MYSQL_DATA_DIR)
+                }
+            }
+        }
+        stage('E2E测试') {
+            agent { label "${client_node}" }
+            steps {
+                script {
+                    runE2ETests(params.THREAD_COUNTS, params.TEST_DURATION, "${server_node}", "/nas/brian.mao/postsilicon_test/${params.cpuModel}/mysql_test", 'e2e', 'root')
+                }
+            }
+        }
+        stage('单NUMA启动MySQL') {
+            agent { label "${server_node}" }
+            steps {
+                script {
+                    startMySQLNUMA(params.MYSQL_DATA_DIR, 0, 'single_numa')
+                }
+            }
+        }
+        stage('单NUMA性能测试') {
+            agent { label "${client_node}" }
+            steps {
+                script {
+                    runE2ETests(params.THREAD_COUNTS, params.TEST_DURATION, "${server_node}", "/nas/brian.mao/postsilicon_test/${params.cpuModel}/mysql_test", 'single_numa', 'root')
+                }
+            }
+        }
+        stage('跨NUMA启动MySQL') {
+            agent { label "${server_node}" }
+            steps {
+                script {
+                    startMySQLNUMA(params.MYSQL_DATA_DIR, 1, 'cross_numa')
+                }
+            }
+        }
+        stage('跨NUMA性能测试') {
+            agent { label "${client_node}" }
+            steps {
+                script {
+                    runE2ETests(params.THREAD_COUNTS, params.TEST_DURATION, "${server_node}", "/nas/brian.mao/postsilicon_test/${params.cpuModel}/mysql_test", 'cross_numa', 'root')
+                }
+            }
+        }
+        stage('跨SOCKET启动MySQL') {
+            agent { label "${server_node}" }
+            steps {
+                script {
+                    startMySQLNUMA(params.MYSQL_DATA_DIR, 2, 'cross_socket')
+                }
+            }
+        }
+        stage('跨SOCKET性能测试') {
+            agent { label "${client_node}" }
+            steps {
+                script {
+                    runE2ETests(params.THREAD_COUNTS, params.TEST_DURATION, "${server_node}", "/nas/brian.mao/postsilicon_test/${params.cpuModel}/mysql_test", 'cross_socket', 'root')
+                }
+            }
+        }
+        stage('启动MySQL2实例') {
+            agent { label "${server_node}" }
+            steps {
+                script {
+                    initializeMySQLInstances(2)
+                }
+            }
+        }
+        stage('2实例性能测试') {
+            agent { label "${client_node}" }
+            steps {
+                script {
+                    runE2ETests(params.THREAD_COUNTS, params.TEST_DURATION, "${server_node}", "/nas/brian.mao/postsilicon_test/${params.cpuModel}/mysql_test", '2_instances', 'mysql')
+                }
+            }
+        }
+        stage('3实例启动与性能测试') {
+            agent { label "${server_node}" }
+            steps {
+                script {
+                    initializeMySQLInstances(3)
+                }
+            }
+        }
+        stage('3实例性能测试') {
+            agent { label "${client_node}" }
+            steps {
+                script {
+                    runE2ETests(params.THREAD_COUNTS, params.TEST_DURATION, "${server_node}", "/nas/brian.mao/postsilicon_test/${params.cpuModel}/mysql_test", '3_instances', 'mysql')
+                }
+            }
+        }
+        stage('启动MySQL 4实例') {
+            agent { label "${server_node}" }
+            steps {
+                script {
+                    initializeMySQLInstances(4)
+                }
+            }
+        }
+        stage('4实例性能测试') {
+            agent { label "${client_node}" }
+            steps {
+                script {
+                    runE2ETests(params.THREAD_COUNTS, params.TEST_DURATION, "${server_node}", "/nas/brian.mao/postsilicon_test/${params.cpuModel}/mysql_test", '4_instances', 'mysql')
+                }
+            }
+        }
+        stage('单元全量测试') {
+            agent { label "${server_node}" }
+            steps {
+                script {
+                    runFullUnitTests(params.POSTSILICON_DIR)
+                }
+            }
+        }
+        stage('集成测试') {
+            agent { label "${server_node}" }
+            steps {
+                script {
+                    runIntegrationTests(params.POSTSILICON_DIR)
+                }
+            }
+        }
+    }
+}
+def prepareServerEnvironment() {
+    sh """
+    wget -O autorun_multi_instances.sh http://10.1.180.190/database/mysql/autorun_multi_instances.sh
+
+    if [ ! -d \$MYSQL_DATA_DIR ]; then
+        mkdir -p \$MYSQL_DATA_DIR
+    fi
+
+    if [ ! -d \$POSTSILICON_DIR ]; then
+        mkdir -p \$POSTSILICON_DIR
+    fi
+
+    yum install cmake -y
+    yum install gcc-toolset-12-gcc gcc-toolset-12-gcc-c++ gcc-toolset-12-binutils gcc-toolset-12-annobin-annocheck gcc-toolset-12-annobin-plugin-gcc -y
+    yum install libtirpc-devel -y
+    yum install perl-CPAN -y
+    yum update -y
+    yum install -y libcgroup-tools
+
+    if [ ! -d rpcsvc-proto-1.4.4 ]; then
+        echo "rpcsvc-proto-1.4.4 directory not found. Downloading..."
+        wget https://github.com/thkukuk/rpcsvc-proto/releases/download/v1.4.4/rpcsvc-proto-1.4.4.tar.xz
+        tar -xvf rpcsvc-proto-1.4.4.tar.xz
+        cd rpcsvc-proto-1.4.4/ && ./configure && make -j128 && make install
+        cd -
+    else
+        echo "rpcsvc-proto-1.4.4 directory already exists. Skipping download."
+    fi
+
+    if [ ! -d /usr/local/boost/boost_1_77_0 ]; then
+        echo "boost_1_77_0 directory not found. Downloading..."
+        wget https://sourceforge.net/projects/boost/files/boost/1.77.0/boost_1_77_0.tar.gz -P /usr/local/boost
+        tar -xvf /usr/local/boost/boost_1_77_0.tar.gz -C /usr/local/boost
+    else
+        echo "boost_1_77_0 directory already exists. Skipping download."
+    fi
+
+    cpan Memoize -y
+
+    if [ ! -d \$POSTSILICON_DIR/mysql-8.0.35 ]; then
+        echo "mysql-8.0.35 directory not found. Downloading..."
+        wget http://10.1.180.190/database/mysql/mysql-boost-8.0.35.tar.gz
+        tar -zxf mysql-boost-8.0.35.tar.gz
+        mv mysql-8.0.35 /tmp
+    else
+        echo "mysql-8.0.35 directory already exists. Skipping download."
+    fi
+
+    if [ -d /tmp/mysql-8.0.35 ]; then
+        mv /tmp/mysql-8.0.35 \$POSTSILICON_DIR
+    fi
+    
+    if [ -d \$MYSQL_DATA_DIR ] && [ "\$(ls -A \$MYSQL_DATA_DIR)" ]; then
+        echo 'MYSQL_DATA_DIR directory found, clearing existing files...'
+        cd \$MYSQL_DATA_DIR
+        rm -rf *
+    else
+        echo 'MYSQL_DATA_DIR directory not found, creating directory...'
+    fi
+    rm -f /var/log/mysqld.log
+
+    cd \$POSTSILICON_DIR/mysql-8.0.35 || exit 1
+    rm -f mysql-test/collections/disabled.def
+    wget -P mysql-test/collections/ http://10.1.180.190/database/mysql/disabled.def
+    mkdir -p build
+    cd build/
+    rm -rdf *
+    cmake .. -DCMAKE_INSTALL_PREFIX=/usr/local/mysql -DSYSCONFDIR=/usr/local/mysql -DMYSQL_UNIX_ADDR=/usr/local/mysql/mysql.sock -DDEFAULT_CHARSET=utf8mb4 -DDEFAULT_COLLATION=utf8mb4_unicode_ci -DWITH_SSL=system -DWITH_INNOBASE_STORAGE_ENGINE=1 -DWITH_ARCHIVE_STORAGE_ENGINE=1 -DWITH_BLACKHOLE_STORAGE_ENGINE=1 -DWITH_PERFSCHEMA_STORAGE_ENGINE=1 -DWITH_MYISAM_STORAGE_ENGINE=1 -DWITH_INNODB_MEMCACHED=ON -DENABLED_LOCAL_INFILE=ON -DMYSQL_TCP_PORT=3306 -DDOWNLOAD_BOOST=1 -DWITH_BOOST=/usr/local/boost -DMYSQL_DATADIR=\$MYSQL_DATA_DIR -DWITH_DEBUG=1 -DWITH_UNIT_TESTS=1 -DWITH_VALGRIND=1 -DDEFAULT_COLLATION=utf8mb4_0900_ai_ci && make -j128 && make install
+    """
+}
+
+
+def prepareClientEnvironment() {
+    sh '''
+    yum install mysql-devel -y
+    if [ ! -d sysbench ]; then
+        wget https://github.com/akopytov/sysbench/archive/refs/tags/1.0.20.tar.gz -O sysbench-1.0.20.tar.gz
+        tar -zxvf sysbench-1.0.20.tar.gz
+        mv sysbench-1.0.20 sysbench
+    else
+        echo "sysbench directory already exists. Skipping download."
+    fi
+    cd sysbench
+    ./autogen.sh
+    ./configure
+    make
+    make install
+    '''
+}
+def startMySQLServer(String dataDir) {
+    withEnv(["JENKINS_NODE_COOKIE=dontKillMe"]) {
+    sh """
+    if pgrep mysqld > /dev/null; then
+        killall mysqld
+        sleep 30
+    fi
+    cat > /etc/my.cnf << EOF
+[mysql]
+prompt="instance_name \\\\R:\\\\m:\\\\s>"
+[client]
+port = 3306
+socket=\$MYSQL_DATA_DIR/mysql.sock
+[mysqld_safe]
+core-file-size=unlimited
+[mysqld]
+port = 3306
+core-file
+binlog_format=row
+binlog_expire_logs_seconds=0
+default-storage-engine = innodb
+character-set-server = utf8
+collation-server = utf8_general_ci
+default-authentication-plugin=mysql_native_password
+datadir=\$MYSQL_DATA_DIR
+socket=\$MYSQL_DATA_DIR/mysql.sock
+log-error=/var/log/mysqld.log
+pid-file=/var/run/mysqld/mysqld.pid
+server_id = 1
+gtid_mode = ON
+log-bin = mysql-bin
+log_slave_updates = ON
+master_info_repository = TABLE
+relay_log_info_repository = TABLE
+transaction_write_set_extraction = XXHASH64
+enforce_gtid_consistency = ON
+slave_preserve_commit_order = ON
+binlog_checksum = NONE
+max_allowed_packet=1G
+innodb_fast_shutdown=0
+innodb_thread_concurrency=0
+innodb_buffer_pool_size=51539607552
+EOF
+
+    if [ ! -d \$MYSQL_DATA_DIR ]; then
+        echo "Creating data directory: \$MYSQL_DATA_DIR"
+        mkdir -p \$MYSQL_DATA_DIR
+    fi
+
+    if [ -d \$MYSQL_DATA_DIR ] && [ "\$(ls -A \$MYSQL_DATA_DIR)" ]; then
+        echo "Clearing data directory: \$MYSQL_DATA_DIR"
+        cd \$MYSQL_DATA_DIR
+        rm -rf *
+    else
+        echo "Data directory is empty or does not exist."
+    fi
+
+    rm -f /var/log/mysqld.log
+    /usr/local/mysql/bin/mysqld --initialize --user=root --datadir=\$MYSQL_DATA_DIR
+    if [ ! -d /var/run/mysqld ]; then
+        mkdir /var/run/mysqld
+    fi
+    export JENKINS_NODE_COOKIE=dontKillMe
+    /usr/local/mysql/bin/mysqld --daemonize --user=root --datadir=\$MYSQL_DATA_DIR
+    /usr/local/mysql/bin/mysql -uroot -p"\$(grep 'temporary password' /var/log/mysqld.log | awk '{print \$NF}')" --connect-expired-password --execute="alter user root@localhost identified with mysql_native_password by 'mysql';"
+    /usr/local/mysql/bin/mysql -uroot -p"mysql" --connect-expired-password --database="mysql" --execute="update user set host = '%', plugin = 'mysql_native_password' where user = 'root' and host = 'localhost';"
+    /usr/local/mysql/bin/mysql -uroot -p"mysql" --connect-expired-password --database="mysql" --execute="flush privileges;"
+    /usr/local/mysql/bin/mysql -uroot -p"mysql" --connect-expired-password --execute="GRANT ALL PRIVILEGES ON *.* TO 'root'@'%';"
+    /usr/local/mysql/bin/mysql -uroot -p"mysql" --connect-expired-password --execute="GRANT ALL PRIVILEGES ON mysql_innodb_cluster_metadata.* TO root@'%' WITH GRANT OPTION;"
+    /usr/local/mysql/bin/mysql -uroot -p"mysql" --connect-expired-password --execute="GRANT RELOAD,SHUTDOWN,PROCESS,FILE, SUPER,REPLICATION SLAVE,REPLICATION CLIENT ON *.* TO root@'%' WITH GRANT OPTION;"
+    /usr/local/mysql/bin/mysql -uroot -p"mysql" --connect-expired-password --execute="GRANT SELECT ON *.* TO root@'%' WITH GRANT OPTION;"
+    /usr/local/mysql/bin/mysql -uroot -p"mysql" --connect-expired-password --execute="create database db_test;"
+    /usr/local/mysql/bin/mysql -uroot -p"mysql" --connect-expired-password --execute="flush privileges;"
+    /usr/local/mysql/bin/mysql -uroot -p"mysql" --connect-expired-password --execute="set global innodb_adaptive_hash_index = 0;"
+    """
+    }
+}
+
+
+def runE2ETests(String threadCounts, String testDuration, String serverNode, String logDir, String testPrefix, String user) {
+    def threads = threadCounts.split(',').collect { it.trim().toInteger() }
+
+    for (thread in threads) {
+        echo "oltp_read_write Thread = ${thread} start...."
+
+        sh """
+        mkdir -p ${logDir}
+        if [ -e ${logDir}/${testPrefix}_thread${thread}-oltp_read_write.log ]; then
+            cd ${logDir}
+            rm ${testPrefix}_thread${thread}-oltp_read_write.log
+        fi
+        if [ -e thread${thread}-oltp_read_write.log ]; then
+            rm thread${thread}-oltp_read_write.log
+        fi
+        """
+
+        sh """
+        echo "oltp_read_write Thread = ${thread} #### ROUND"
+        sysbench oltp_read_write --tables=10 --table_size=10000 --threads=${thread} --time=${testDuration} --mysql-user=${user} --mysql-password=mysql --mysql-host=${serverNode} --mysql-port=3306 --mysql-db=db_test --report-interval=10 prepare
+        sysbench oltp_read_write --tables=10 --table_size=10000 --threads=${thread} --time=${testDuration} --mysql-user=${user} --mysql-password=mysql --mysql-host=${serverNode} --mysql-port=3306 --mysql-db=db_test --report-interval=10 run >> thread${thread}-oltp_read_write.log
+        sysbench oltp_read_write --tables=10 --table_size=10000 --threads=${thread} --time=${testDuration} --mysql-user=${user} --mysql-password=mysql --mysql-host=${serverNode} --mysql-port=3306 --mysql-db=db_test --report-interval=10 run >> thread${thread}-oltp_read_write.log
+        sysbench oltp_read_write --tables=10 --table_size=10000 --threads=${thread} --time=${testDuration} --mysql-user=${user} --mysql-password=mysql --mysql-host=${serverNode} --mysql-port=3306 --mysql-db=db_test --report-interval=10 run >> thread${thread}-oltp_read_write.log
+        sysbench oltp_read_write --tables=10 --table_size=10000 --threads=${thread} --time=${testDuration} --mysql-user=${user} --mysql-password=mysql --mysql-host=${serverNode} --mysql-port=3306 --mysql-db=db_test --report-interval=10 cleanup
+        sleep 5
+        """
+
+        sh """
+        echo "###########oltp_read_write Thread = ${thread} Average Result################" >> ${logDir}/${testPrefix}_thread${thread}-oltp_read_write.log
+        echo "95th percentile:" >> ${logDir}/${testPrefix}_thread${thread}-oltp_read_write.log
+        grep "95th percentile" thread${thread}-oltp_read_write.log | awk '{print \$3}' >> ${logDir}/${testPrefix}_thread${thread}-oltp_read_write.log
+        echo "avg:" >> ${logDir}/${testPrefix}_thread${thread}-oltp_read_write.log
+        grep "avg:" thread${thread}-oltp_read_write.log | awk '{print \$2}'  >> ${logDir}/${testPrefix}_thread${thread}-oltp_read_write.log
+        echo "transactions:" >> ${logDir}/${testPrefix}_thread${thread}-oltp_read_write.log
+        grep "transactions:" thread${thread}-oltp_read_write.log | awk '{sub(/\\(/, ""); print \$2}' >> ${logDir}/${testPrefix}_thread${thread}-oltp_read_write.log
+        echo "queries:" >> ${logDir}/${testPrefix}_thread${thread}-oltp_read_write.log
+        grep "queries:" thread${thread}-oltp_read_write.log | awk '{sub(/\\(/, ""); print \$2}' >> ${logDir}/${testPrefix}_thread${thread}-oltp_read_write.log
+        echo "##########################################################" >> ${logDir}/${testPrefix}_thread${thread}-oltp_read_write.log
+        echo "oltp_read_write Thread = ${thread} END"
+        """
+    }
+}
+
+def startMySQLNUMA(String dataDir, int numaType, String testPrefix) {
+    // 根据CPU型号设置NUMA选项
+    def numaOptions
+    switch (cpuModel) {
+        case "Kunpeng920":
+            numaOptions = ['-C 0-31 -m 0', '-C 0-31 -m 1', '-C 0-31 -m 2']
+            break
+        case "Bergamo":
+            numaOptions = ['-C 0-31 -m 0', '-C 0-31 -m 1', '-C 0-31 -m 2']
+            break
+        case "AMD7763":
+            numaOptions = ['-C 0-31 -m 0', '-C 0-31 -m 1', '-C 0-31 -m 1']
+            break
+        case "AmpereAltraMax":
+            numaOptions = ['-C 0-31 -m 0', '-C 0-31 -m 1', '-C 0-31 -m 1']
+            break            
+        case "Intel8352Y":
+            numaOptions = [
+                '-C 0,2,4,6,8,10,12,14,16,18,20,22,24,26,28,30,32,34,36,38,40,42,44,46,48,50,52,54,56,58,60,62 -m 0',
+                '-C 0,2,4,6,8,10,12,14,16,18,20,22,24,26,28,30,32,34,36,38,40,42,44,46,48,50,52,54,56,58,60,62 -m 1',
+                '-C 0,2,4,6,8,10,12,14,16,18,20,22,24,26,28,30,32,34,36,38,40,42,44,46,48,50,52,54,56,58,60,62 -m 1'
+            ]
+            break
+        default:
+            // 默认配置
+            numaOptions = ['-C 0-31 -m 0', '-C 0-31 -m 1', '-C 0-31 -m 2']
+            break
+    }
+    echo "NUMA Options: ${numaOptions[numaType]}"
+
+    sh """
+    pgrep mysqld || {
+        echo "Setting up CPU cgroup..."
+        cd /sys/fs/cgroup/cpu
+        mkdir -p mygroup
+        cd mygroup/
+        echo 1000000 > cpu.cfs_period_us
+        echo 32000000 > cpu.cfs_quota_us
+        cd -
+        echo "CPU cgroup setup complete."
+    }
+
+    echo "Setting up Memory cgroup..."
+    cd /sys/fs/cgroup/memory
+    mkdir -p mygroup
+    cd mygroup/
+    echo 64G > memory.limit_in_bytes
+    cd -
+    echo "Memory cgroup setup complete."
+    """
+
+    def pid = sh(script: 'pidof mysqld || true', returnStdout: true).trim()
+    if (pid) {
+        echo "mysqld PID: ${pid}"
+        sh "kill -9 ${pid}"
+        sleep 3
+    } else {
+        echo "mysqld process not found. Starting mysqld."
+    }
+
+    sh """
+    # Ensure mysql user and group exist
+    if ! id -u root >/dev/null 2>&1; then
+        echo "Creating mysql user and group"
+        if ! getent group root >/dev/null; then
+            groupadd root
+        fi
+        if ! id root >/dev/null 2>&1; then
+            useradd -r -g root root
+        fi
+    fi
+
+    if [ -d \${MYSQL_DATA_DIR} ] && [ "\$(ls -A \${MYSQL_DATA_DIR})" ]; then
+        echo 'Data directory found, clearing existing files...'
+        cd \${MYSQL_DATA_DIR}
+        rm -rf *
+        chown -R root:root \${MYSQL_DATA_DIR}
+    else
+        echo 'Data directory not found, creating directory...'
+        mkdir -p \${MYSQL_DATA_DIR}
+        chown -R root:root \${MYSQL_DATA_DIR}
+    fi
+    /usr/local/mysql/bin/mysqld --initialize-insecure --user=root --datadir=\${MYSQL_DATA_DIR}
+
+    export JENKINS_NODE_COOKIE=dontKillMe
+    cgexec -g memory:mygroup numactl \${numaOptions[numaType]} /usr/local/mysql/bin/mysqld --daemonize --user=root --datadir=\${MYSQL_DATA_DIR}
+    sleep 10  # 等待mysqld完全启动
+    /usr/local/mysql/bin/mysql -uroot -e "CREATE DATABASE db_test;"
+    /usr/local/mysql/bin/mysql -uroot -e "CREATE USER 'root'@'%' IDENTIFIED WITH mysql_native_password BY 'mysql';"
+    /usr/local/mysql/bin/mysql -uroot -e "GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' WITH GRANT OPTION;"
+    /usr/local/mysql/bin/mysql -uroot -e "FLUSH PRIVILEGES;"
+    /usr/local/mysql/bin/mysql -uroot -e "SET GLOBAL max_connections = 1000;"
+    echo "mysqld started."
+    """
+
+    def pid2 = sh(script: 'pidof mysqld || true', returnStdout: true).trim()
+    if (!pid2) {
+        error "Failed to start mysqld daemon. Check mysqld error log."
+    }
+}
+
+def initializeMySQLInstances(int numInstances) {
+    withEnv(["JENKINS_NODE_COOKIE=dontKillMe"]) {
+        sh "bash autorun_multi_instances.sh ${numInstances}"
+    }
+}
+
+def runFullUnitTests(String postSiliconDir) {
+    sh '''
+    pid=$(pidof mysqld || true)
+    if [ -n "$pid" ]; then
+        echo "mysqld PID: ${pid}"
+        kill -9 ${pid}
+        sleep 3
+    else
+        echo "mysqld process not found. Starting mysqld."
+    fi
+
+    cd \$POSTSILICON_DIR/mysql-8.0.35/build/unittest
+    ctest | tee -a /nas/brian.mao/postsilicon_test/func_test_1.log
+    if ! grep -q "100% tests passed, 0 tests failed" /nas/brian.mao/postsilicon_test/func_test_1.log; then
+        exit 1
+    fi
+    '''
+}
+
+
+def runIntegrationTests(String postSiliconDir) {
+    def logDir = '/nas/brian.mao/postsilicon_test/integration_test'
+    if (!fileExists(logDir)) {
+        sh "mkdir -p ${logDir}"
+    }
+
+    def commands = [
+        "perl mysql-test-run.pl --debug-server --force --timer --big-test --testcase-timeout=6000 --max-test-fail=500 --nounit-tests --comment=hypergraph-debug-big --vardir=var-hyp-default-big --hypergraph --no-skip --skip-ndb --parallel=32 --suite-timeout=36000 --report-unstable-tests --tmpdir=/tmp",
+        "perl mysql-test-run.pl --debug-server --force --timer --big-test --testcase-timeout=6000 --max-test-fail=500 --nounit-tests --comment=audit_null-big --vardir=var-audit_null-big --suite=audit_null --no-skip --parallel=32 --suite-timeout=36000 --report-unstable-tests --tmpdir=/tmp",
+        "perl mysql-test-run.pl --debug-server --force --timer --big-test --testcase-timeout=6000 --max-test-fail=500 --nounit-tests --comment=funcs1-big --vardir=var-funcs1-big --suite=funcs_1 --no-skip --parallel=32 --suite-timeout=36000 --report-unstable-tests --tmpdir=/tmp"
+        // Add more commands as necessary...
+    ]
+
+    sh "cd \$POSTSILICON_DIR/mysql-8.0.35/build/mysql-test"
+
+    withEnv(["MTR_BUILD_THREAD=32"]) {
+        commands.eachWithIndex { cmd, index ->
+            def logfile = "${logDir}/command_${String.format('%03d', index + 1)}.log"
+            echo "Running command: ${cmd}"
+            echo "Logging to ${logfile}"
+            catchError(buildResult: 'SUCCESS', stageResult: 'SUCCESS') {
+                sh "cd \$POSTSILICON_DIR/mysql-8.0.35/build/mysql-test && ${cmd} > ${logDir}/command_${String.format('%03d', index + 1)}.log 2>&1"
+            }
+        }
+
+    }
+    currentBuild.result = 'SUCCESS'
+
+}
