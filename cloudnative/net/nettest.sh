@@ -1,19 +1,5 @@
 #!/bin/bash
 
-# Execution time in one round
-PPS_CPUS=10
-PPS_STARTCPU=1
-PPS_STARTPORT=12000
-
-# servier ip
-SERVER_IP=10.1.180.10
-
-# client ip
-CLIENT_IP=10.1.180.17
-
-# result file
-CSVFILE=result.csv
-
 # Check platform environment
 check_env() {
     # check operating privileges
