@@ -1,0 +1,684 @@
+pipeline {
+    agent {label "${server_node}"}
+    parameters {
+        string(name: 'client_node', defaultValue: '10.1.180.6', description:'ESRally client node ip')
+    }
+    environment {
+        START_TIME = 0
+    }
+    stages {  
+        stage('Install Elasticsearch') {
+            steps {
+                script{
+                    if (!env.START_TIME) {
+                                env.START_TIME = new Date().getTime()
+                            }
+                    sh '''
+                        cd /opt
+                        mkdir -p PostSilicon-Elasticsearch
+                        # 获取当前系统的架构信息
+                        ARCH=$(uname -m)
+                        IP=$(ifconfig | grep inet | grep  '10.1.180' | awk '{print $2}')
+                        if ! grep -qxF 'vm.max_map_count = 262144' /etc/sysctl.conf; then
+                            echo 'vm.max_map_count = 262144' >> /etc/sysctl.conf
+                        fi
+                        if ! grep -qxF 'IP $(hostname)' /etc/sysctl.conf; then
+                            echo $IP $(hostname) >> /etc/hosts
+                        fi
+                        sysctl -p
+                        cd PostSilicon-Elasticsearch
+
+                        # 如果当前系统是x86架构
+                        if [ "$ARCH" == "x86_64" ]; then
+                            echo "当前系统是x86架构"
+                            if [ ! -f "elasticsearch-8.9.0-linux-x86_64.tar.gz" ]; then
+                                echo "elasticsearch-8.9.0-linux-x86_64.tar.gz 文件不存在，开始下载..."
+                                # 执行下载语句
+                                wget http://10.1.180.190/bigdata/Elasticsearch/elasticsearch-8.9.0-linux-x86_64.tar.gz
+                                tar -zxvf elasticsearch-8.9.0-linux-x86_64.tar.gz
+                            else
+                                echo "elasticsearch-8.9.0-linux-x86_64.tar.gz 文件已存在，无需下载。"
+                            fi
+                        # 如果当前系统是ARM架构
+                        elif [ "$ARCH" == "aarch64" ]; then
+                            echo "当前系统是ARM架构"
+                            if [ ! -f "elasticsearch-8.9.0-linux-aarch64.tar.gz" ]; then
+                                echo "elasticsearch-8.9.0-linux-aarch64.tar.gz 文件不存在，开始下载..."
+                                # 执行下载语句
+                                wget http://10.1.180.190/bigdata/Elasticsearch/elasticsearch-8.9.0-linux-aarch64.tar.gz  
+                                tar -zxvf elasticsearch-8.9.0-linux-aarch64.tar.gz
+                            else
+                                echo "elasticsearch-8.9.0-linux-aarch64.tar.gz 文件已存在，无需下载。"
+                            fi
+
+                        else
+                            echo "未知系统架构：$ARCH"
+                        fi
+                    ''' 
+                }
+            }
+        }
+        stage('config_ES') {
+            steps {
+               sh '''     
+                # 配置8C16GES实例
+                CONFIG_FILE="/opt/PostSilicon-Elasticsearch/elasticsearch-8.9.0/config/instance8C16G/elasticsearch.yml"
+                CONFIG_DIR="/opt/PostSilicon-Elasticsearch/elasticsearch-8.9.0/config/instance8C16G"
+
+                DATA_PATH="/data1/es/data"
+                LOGS_PATH="/data1/es/logs"
+                
+                if ! id "es";then
+                    useradd es
+                fi
+
+                device="/dev/nvme0n1"
+                mount_point="/data1"
+                mkdir -p $DATA_PATH
+                mkdir -p $LOGS_PATH
+                mkdir -p $CONFIG_DIR
+
+
+                # 检查设备是否已经挂载到指定目录
+                if ! mount | grep -q "$device on $mount_point"; then
+                    echo "设备 $device 没有挂载到 $mount_point，正在挂载..."
+                    if [[ \$(lsof -t "/dev/nvme0n1") ]]; then
+                        lsof -t "/dev/nvme0n1" |xargs kill -9
+                    fi
+                    sleep 60
+
+                    if [ -e /data1 ]; then
+                        umount /data1 ||true
+                    fi
+                    
+                    mount "$device" "$mount_point"
+                    if [ $? -eq 0 ]; then
+                        echo "挂载成功."
+                    else
+                        echo "挂载失败."
+                    fi
+                else
+                    echo "设备 $device 已经挂载到 $mount_point."
+                fi
+                    rm -rf /data1/*
+                    mkdir -p $DATA_PATH
+                    mkdir -p $LOGS_PATH
+                    mkdir -p $CONFIG_DIR
+
+                # 创建ES实例的配置文件
+                cat > "$CONFIG_FILE" <<EOF
+cluster.name: es_cluster
+node.name: node0
+network.host: $(hostname)
+transport.port: 8200
+http.port: 9200
+path.data: /data1/es/data
+path.logs: /data1/es/logs
+cluster.initial_master_nodes: ["node0"]
+xpack.security.enabled: false
+
+xpack.security.transport.ssl.enabled: false
+
+xpack.security.http.ssl.enabled: false
+
+http.netty.worker_count: 4
+http.cors.enabled: true
+http.cors.allow-origin: '*'
+EOF
+                # 设置ES实例的JVM堆内存参数
+                cp /opt/PostSilicon-Elasticsearch/elasticsearch-8.9.0/config/jvm.options $CONFIG_DIR
+                cp /opt/PostSilicon-Elasticsearch/elasticsearch-8.9.0/config/log4j2.properties $CONFIG_DIR
+
+                echo -Xms16g >> $CONFIG_DIR/jvm.options
+                echo -Xmx16g >> $CONFIG_DIR/jvm.options
+
+                chown -R es:es /data1/es
+                chown -R es:es /opt/PostSilicon-Elasticsearch
+
+                su - es -c "jps | awk '{print \$1}' | xargs -r kill -9 || true"
+                cpu_vendor=\$(dmidecode -t processor | grep 'Manufacturer'|uniq)
+
+                if [[ "\$cpu_vendor" =~ "Intel" ]]; then
+                    su - es -c 'ES_PATH_CONF=/opt/PostSilicon-Elasticsearch/elasticsearch-8.9.0/config/instance8C16G numactl -C $(seq -s, 20 2 $((20 + 2 * 7))) -m 0 /opt/PostSilicon-Elasticsearch/elasticsearch-8.9.0/bin/elasticsearch -d'
+                else
+                    su - es -c 'ES_PATH_CONF=/opt/PostSilicon-Elasticsearch/elasticsearch-8.9.0/config/instance8C16G numactl -C 20-27 -m 0 /opt/PostSilicon-Elasticsearch/elasticsearch-8.9.0/bin/elasticsearch -d'
+                fi 
+
+                sleep 60
+               '''
+            }
+        }
+        stage('SingleSocket') {
+            steps {
+                node("${params.client_node}") {
+                    withEnv(["NODE_IP=${server_node}"]) {
+                        sh '''
+                        current_date=$(date +%Y%m%d)
+                        systemctl stop irqbalance.service
+                        /opt/changeLowLoadIRQ.sh
+                        for((i=1;i<=3;i++));do                      
+                            numactl -C $(seq -s, 16 2 $((16 + 2 * 13))) --membind=0 esrally race --offline --pipeline=benchmark-only --track=http_logs --target-hosts=${NODE_IP}:9200 --include-tasks="delete-index,create-index,check-cluster-health,index-append,term,scroll" --report-format=markdown --race-id=$current_date --kill-running-processes --report-file="/home/esrally/$current_date/${NODE_IP}/SingleSocket/instance8C16G/http_logs/low_load/test$i.md"
+                            sleep 60
+                        done
+                        '''
+                    }
+                }
+            }
+        }
+        stage('SingleSocketFullLoad') {
+            steps {
+                node("${params.client_node}") {
+                    withEnv(["NODE_IP=${server_node}"]) {
+                        sh '''
+                        current_date=$(date +%Y%m%d)
+                        /opt/changeFullLoadIRQ.sh
+                        for((i=1;i<=3;i++));do
+                            numactl -C $(seq -s, 16 2 $((16 + 2 * 15))) -m 0 esrally race --offline --pipeline=benchmark-only --track=http_logs_fullload --track-params="bulk_size:320000,number_of_shards:8" --target-hosts=${NODE_IP}:9200 --include-tasks="delete-index,create-index,check-cluster-health,index-append,term,scroll" --report-format=markdown --race-id=$current_date --kill-running-processes --report-file="/home/esrally/$current_date/${NODE_IP}/SingleSocket/instance8C16G/http_logs/full_load/test$i.md"
+                            sleep 60
+                        done
+                        '''
+                    }
+                }
+            }
+        }
+        stage('SingleSocketFullTask') {
+            steps {
+                node("${params.client_node}") {
+                    withEnv(["NODE_IP=${server_node}"]) {
+                        sh '''
+                        current_date=$(date +%Y%m%d)
+                        /opt/changeLowLoadIRQ.sh
+                        for((i=1;i<=3;i++));do                      
+                            numactl -C $(seq -s, 16 2 $((16 + 2 * 13))) --membind=0 esrally race --offline --pipeline=benchmark-only --track=http_logs --target-hosts=${NODE_IP}:9200 --report-format=markdown --race-id=$current_date --kill-running-processes --report-file="/home/esrally/$current_date/${NODE_IP}/SingleSocket/instance8C16G/http_logs/full_task/test$i.md"
+                            sleep 60
+                        done
+                        '''
+                    }
+                }
+            }
+        }
+        stage('CrossSocket') {
+            steps {
+                sh '''
+                # 网卡磁盘在socket0 CPU在socket1
+                su - es -c "jps | awk '{print \$1}' | xargs -r kill -9 || true"
+                cpu_vendor=\$(dmidecode -t processor | grep 'Manufacturer'|uniq)
+
+                if [[ "\$cpu_vendor" =~ "Intel" ]]; then
+                    su - es -c 'ES_PATH_CONF=/opt/PostSilicon-Elasticsearch/elasticsearch-8.9.0/config/instance8C16G numactl -C $(seq -s, 21 2 $((21 + 2 * 7))) -m 0 /opt/PostSilicon-Elasticsearch/elasticsearch-8.9.0/bin/elasticsearch -d'
+                else
+                    su - es -c 'ES_PATH_CONF=/opt/PostSilicon-Elasticsearch/elasticsearch-8.9.0/config/instance8C16G numactl -C 200-207 -m 0 /opt/PostSilicon-Elasticsearch/elasticsearch-8.9.0/bin/elasticsearch -d'
+                fi  
+                sleep 60
+                '''
+
+                node("${params.client_node}") {
+                    withEnv(["NODE_IP=${server_node}"]) {
+                        sh '''
+                        current_date=$(date +%Y%m%d)
+                        for((i=1;i<=3;i++));do                      
+                            numactl -C $(seq -s, 16 2 $((16 + 2 * 13))) --membind=0 esrally race --offline --pipeline=benchmark-only --track=http_logs --target-hosts=${NODE_IP}:9200 --include-tasks="delete-index,create-index,check-cluster-health,index-append,term,scroll" --report-format=markdown --race-id=$current_date --kill-running-processes --report-file="/home/esrally/$current_date/${NODE_IP}/CrossSocket/net_disk_mem_0_cpu_1/http_logs/low_load/test$i.md"
+                            sleep 60
+                        done
+                        '''
+                    }
+                }
+
+                sh '''
+                # 网卡磁盘在socket0 CPUmem在socket1
+                su - es -c "jps | awk '{print \$1}' | xargs -r kill -9 || true"
+                cpu_vendor=\$(dmidecode -t processor | grep 'Manufacturer'|uniq)
+                if [[ "\$cpu_vendor" =~ "Intel" ]]; then
+                    su - es -c 'ES_PATH_CONF=/opt/PostSilicon-Elasticsearch/elasticsearch-8.9.0/config/instance8C16G numactl -C $(seq -s, 21 2 $((21 + 2 * 7))) -m 0 /opt/PostSilicon-Elasticsearch/elasticsearch-8.9.0/bin/elasticsearch -d'
+                else
+                    su - es -c 'ES_PATH_CONF=/opt/PostSilicon-Elasticsearch/elasticsearch-8.9.0/config/instance8C16G numactl -C 200-207 -m 1 /opt/PostSilicon-Elasticsearch/elasticsearch-8.9.0/bin/elasticsearch -d'
+                fi  
+                sleep 60
+                '''
+
+                node("${params.client_node}") {
+                    withEnv(["NODE_IP=${server_node}"]) {
+                        sh '''
+                        current_date=$(date +%Y%m%d)
+                        for((i=1;i<=3;i++));do                      
+                            numactl -C $(seq -s, 16 2 $((16 + 2 * 13))) --membind=0 esrally race --offline --pipeline=benchmark-only --track=http_logs --target-hosts=${NODE_IP}:9200 --include-tasks="delete-index,create-index,check-cluster-health,index-append,term,scroll" --report-format=markdown --race-id=$current_date --kill-running-processes --report-file="/home/esrally/$current_date/${NODE_IP}/CrossSocket/net_disk_0_cpu_mem_1/http_logs/low_load/test$i.md"
+                            sleep 60
+                        done
+                        '''
+                    }
+                }
+                
+                sh '''
+                # 网卡在socket 0  CPU磁盘在socket 1
+                su - es -c "jps | awk '{print \$1}' | xargs -r kill -9 || true"
+                DATA_PATH="/data2/es/data"
+                LOGS_PATH="/data2/es/logs"
+                cpu_vendor=\$(dmidecode -t processor | grep 'Manufacturer'|uniq)
+                device="/dev/nvme3n1"
+                if [[ "\$cpu_vendor" =~ "AMD" ]]; then
+                    device="/dev/nvme4n1"
+                elif [[ "\$cpu_vendor" =~ "Ampere" ]]; then
+                    device="/dev/nvme3n1"
+                elif [[ "\$cpu_vendor" =~ "Intel" ]]; then
+                    device="/dev/nvme3n1"
+                else
+                    echo "hj01 to fill"
+                fi
+                mkdir -p $DATA_PATH
+                mkdir -p $LOGS_PATH
+                mount_point="/data2"
+
+                
+
+                # 检查设备是否已经挂载到指定目录
+                if ! mount | grep -q "$device on $mount_point"; then
+                    echo "设备 $device 没有挂载到 $mount_point，正在挂载..."
+                    if [[ \$(lsof -t "$device") ]]; then
+                        lsof -t "$device" |xargs kill -9
+                    fi
+                    sleep 60
+
+                    if [ -e /data2 ]; then
+                        umount /data2 ||true
+                    fi
+
+                    mount "$device" "$mount_point"
+                    if [ $? -eq 0 ]; then
+                        echo "挂载成功."
+                    else
+                        echo "挂载失败."
+                    fi
+                else
+                    echo "设备 $device 已经挂载到 $mount_point."
+                fi
+                rm -rf /data2/*
+                mkdir -p $DATA_PATH
+                mkdir -p $LOGS_PATH
+
+                sed -i 's#^path.data:.*#path.data: /data2/es/data#' /opt/PostSilicon-Elasticsearch/elasticsearch-8.9.0/config/instance8C16G/elasticsearch.yml
+                sed -i 's#^path.logs:.*#path.logs: /data2/es/logs#' /opt/PostSilicon-Elasticsearch/elasticsearch-8.9.0/config/instance8C16G/elasticsearch.yml
+                chown -R es:es /data2/es
+                cpu_vendor=\$(dmidecode -t processor | grep 'Manufacturer'|uniq)
+                if [[ "\$cpu_vendor" =~ "Intel" ]]; then
+                    su - es -c 'ES_PATH_CONF=/opt/PostSilicon-Elasticsearch/elasticsearch-8.9.0/config/instance8C16G numactl -C $(seq -s, 20 2 $((20 + 2 * 7))) -m 0 /opt/PostSilicon-Elasticsearch/elasticsearch-8.9.0/bin/elasticsearch -d'
+                else
+                    su - es -c 'ES_PATH_CONF=/opt/PostSilicon-Elasticsearch/elasticsearch-8.9.0/config/instance8C16G numactl -C 20-27 -m 0 /opt/PostSilicon-Elasticsearch/elasticsearch-8.9.0/bin/elasticsearch -d'
+                fi  
+
+                sleep 60
+                '''
+                node("${params.client_node}") {
+                    withEnv(["NODE_IP=${server_node}"]) {
+                        sh '''
+                        current_date=$(date +%Y%m%d)
+                        for((i=1;i<=3;i++));do                      
+                            numactl -C $(seq -s, 16 2 $((16 + 2 * 13))) --membind=0 esrally race --offline --pipeline=benchmark-only --track=http_logs --target-hosts=${NODE_IP}:9200 --include-tasks="delete-index,create-index,check-cluster-health,index-append,term,scroll" --report-format=markdown --race-id=$current_date --kill-running-processes --report-file="/home/esrally/$current_date/${NODE_IP}/CrossSocket/net_cpu_mem_0_disk_1/http_logs/low_load/test$i.md"
+                            sleep 60
+                        done
+                        '''
+                    }
+                }
+                sh '''
+                # 网卡磁盘在socket 0  CPU磁盘在socket 1
+                su - es -c "jps | awk '{print \$1}' | xargs -r kill -9 || true"
+                rm -rf /data1/es/data/*
+                rm -rf /data2/es/data/*
+
+                sed -i 's#^path.data:.*#path.data: /data1/es/data,/data2/es/data#' /opt/PostSilicon-Elasticsearch/elasticsearch-8.9.0/config/instance8C16G/elasticsearch.yml
+                sed -i 's#^path.logs:.*#path.logs: /data1/es/logs,data2/es/logs#' /opt/PostSilicon-Elasticsearch/elasticsearch-8.9.0/config/instance8C16G/elasticsearch.yml
+
+                cpu_vendor=\$(dmidecode -t processor | grep 'Manufacturer'|uniq)
+                if [[ "\$cpu_vendor" =~ "Intel" ]]; then
+                    su - es -c 'ES_PATH_CONF=/opt/PostSilicon-Elasticsearch/elasticsearch-8.9.0/config/instance8C16G numactl -C $(seq -s, 20 2 $((20 + 2 * 7))) -m 0 /opt/PostSilicon-Elasticsearch/elasticsearch-8.9.0/bin/elasticsearch -d'
+                else
+                    su - es -c 'ES_PATH_CONF=/opt/PostSilicon-Elasticsearch/elasticsearch-8.9.0/config/instance8C16G numactl -C 20-27 -m 0 /opt/PostSilicon-Elasticsearch/elasticsearch-8.9.0/bin/elasticsearch -d'
+                fi  
+
+                sleep 60
+                '''
+                node("${params.client_node}") {
+                    withEnv(["NODE_IP=${server_node}"]) {
+                        sh '''
+                        current_date=$(date +%Y%m%d)
+                        for((i=1;i<=3;i++));do  
+                            numactl -C $(seq -s, 16 2 $((16 + 2 * 13))) --membind=0 esrally race --offline --pipeline=benchmark-only --track=http_logs --target-hosts=${NODE_IP}:9200 --include-tasks="delete-index,create-index,check-cluster-health,index-append,term,scroll" --report-format=markdown --race-id=$current_date --kill-running-processes --report-file="/home/esrally/$current_date/${NODE_IP}/CrossSocket/net_disk_cpu_mem_0_disk_1/http_logs/low_load/test$i.md"
+                            sleep 60
+                        done
+                        '''
+                    }
+                }
+            }
+        }
+         stage('SingleSocketParaller') {
+            steps {
+                script{
+                    for (int i=1; i<=8; i=i*2){
+                        def instance_count = i
+                        def nodeList = []
+                        def portList = []
+                        for (int k = 1; k <= instance_count; k++) {
+                            def tcp_port = "${server_node}:" + (8200 + 10 * instance_count + k - 1)
+                            nodeList.add("\"node${k}\"")
+                            portList.add("\"${tcp_port}\"")
+                        }
+                        def nodeListStr = nodeList.join(",")
+
+                        sh """
+                        count=${instance_count}
+                        echo "count = \$count"
+                        su - es -c "jps | awk '{print \$1}' | xargs -r kill -9 || true"
+                        CORES_PER_INSTANCE=8
+                        echo "NODE_LIST = ${nodeListStr}"
+                        for ((j=1; j<=\$count; j++)); do
+                            
+                            # 计算ES实例的HTTP端口
+                            HTTP_PORT=\$((9200 + 10 * \$count + \$j - 1))
+                            TCP_PORT=\$((8200 + 10 * \$count + \$j - 1))
+
+                            echo "HTTP_PORT = \$HTTP_PORT"
+                            echo "TCP_PORT = \$TCP_PORT"
+                            # 计算ES实例的配置文件路径
+                            CONFIG_FILE="/opt/PostSilicon-Elasticsearch/elasticsearch-8.9.0/config/paraller_test/paraller\$count/instance\$j/elasticsearch.yml"
+                            CONFIG_DIR="/opt/PostSilicon-Elasticsearch/elasticsearch-8.9.0/config/paraller_test/paraller\$count/instance\$j/"
+                            DATA_PATH="/data1/es/paraller_test/paraller\$count/instance\$j/data"
+                            LOGS_PATH="/data1/es/paraller_test/paraller\$count/instance\$j/logs"
+                            CLUSTER_NAME="es_paraller_test_instance\$count"
+                            echo "CLUSTER_NAME = \$CLUSTER_NAME"
+
+                            mkdir -p \$CONFIG_DIR
+                            mkdir -p \$DATA_PATH
+                            mkdir -p \$LOGS_PATH
+
+                            rm -rf \$DATA_PATH/*
+                            rm -rf \$DATA_PATH/*
+                            # 创建ES实例的配置文件
+                            cat > "\$CONFIG_FILE" <<EOF
+                            cluster.name: \$CLUSTER_NAME
+                            node.name: node\$j
+                            network.host: \$(hostname)
+                            transport.port: \$TCP_PORT
+                            http.port: \$HTTP_PORT
+                            path.data: \$DATA_PATH
+                            path.logs: \$LOGS_PATH
+                            discovery.seed_hosts: ${portList}
+
+                            cluster.initial_master_nodes: [${nodeListStr}]
+                            xpack.security.enabled: false
+                            xpack.security.transport.ssl.enabled: false
+
+                            xpack.security.http.ssl.enabled: false
+
+                            http.netty.worker_count: 4
+                            http.cors.enabled: true
+                            http.cors.allow-origin: '*'
+EOF
+                            # 设置ES实例的JVM堆内存参数
+                            cp /opt/PostSilicon-Elasticsearch/elasticsearch-8.9.0/config/jvm.options \$CONFIG_DIR
+                            cp /opt/PostSilicon-Elasticsearch/elasticsearch-8.9.0/config/log4j2.properties \$CONFIG_DIR
+
+                            echo -Xms16g >> \$CONFIG_DIR/jvm.options
+                            echo -Xmx16g >> \$CONFIG_DIR/jvm.options
+
+                            cat \$CONFIG_FILE
+                        done
+
+                        chown -R es:es /data1/es
+                        chown -R es:es /opt/PostSilicon-Elasticsearch
+                        start=0
+                        end=0
+                        cpu_vendor=\$(dmidecode -t processor | grep 'Manufacturer'|uniq)
+                        for((a=1;a<=\$count;a++));do
+                            # 计算ES实例的CPU亲和性参数
+
+                            if [[ "\$cpu_vendor" =~ "Intel" ]]; then
+                                echo "start=\$start"
+                                end=\$((\$start + 2 * 7))
+                                CPU=\$(seq -s, \$start 2 \$end)
+                                echo "\$CPU"
+                                start=\$((\$end+2))
+                                su - es -c "ES_PATH_CONF=/opt/PostSilicon-Elasticsearch/elasticsearch-8.9.0/config/paraller_test/paraller\$count/instance\$a numactl -C \$CPU -m 0 /opt/PostSilicon-Elasticsearch/elasticsearch-8.9.0/bin/elasticsearch -d"
+                            else
+                                start=\$((CORES_PER_INSTANCE * (\$a - 1)))
+                                echo "\$start"
+                                end=\$(((CORES_PER_INSTANCE * \$a) - 1))
+                                echo "\$end"
+                                CPU="\$start-\$end"
+                                echo "\$CPU"
+                                su - es -c "ES_PATH_CONF=/opt/PostSilicon-Elasticsearch/elasticsearch-8.9.0/config/paraller_test/paraller\$count/instance\$a numactl -C \$CPU -m 0 /opt/PostSilicon-Elasticsearch/elasticsearch-8.9.0/bin/elasticsearch -d"
+                            fi
+                        done
+                        sleep 60
+                        """
+                        node("${params.client_node}") {
+                            withEnv(["NODE_IP=${server_node}","INSTANCE_COUNT=${instance_count}"]) {
+                                sh '''
+                                    TARGET_HOSTS=""
+                                    count=${INSTANCE_COUNT}
+                                    for ((j=1; j<=$count; j++)); do
+                                        PORT=$((9200 + $count * 10 + j - 1))
+                                        if [ -z "$TARGET_HOSTS" ]; then
+                                            TARGET_HOSTS="${NODE_IP}:${PORT}"
+                                        else
+                                            TARGET_HOSTS="${TARGET_HOSTS},${NODE_IP}:${PORT}"
+                                        fi
+                                    done
+
+                                    if [ -z "$TARGET_HOSTS" ]; then
+                                        echo "No target hosts specified."
+                                        exit 1
+                                    fi
+
+                                current_date=$(date +%Y%m%d)  
+
+                                for((i=1;i<=3;i++));do
+                                    numactl -C $(seq -s, 16 2 $((16 + 2 * 13))) --membind=0 esrally race --offline --pipeline=benchmark-only --track=http_logs --target-hosts=${TARGET_HOSTS} --include-tasks="delete-index,create-index,check-cluster-health,index-append,term,scroll" --report-format=markdown --race-id=$current_date --kill-running-processes --report-file="/home/esrally/$current_date/${NODE_IP}/SingleSocketParaller/instance_${INSTANCE_COUNT}/http_logs/low_load/test$i.md"
+                                    sleep 60
+                                done
+                                '''
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        stage('SingleSocketDifferentInstance') {
+            steps {
+                sh '''
+                su - es -c "jps | awk '{print \$1}' | xargs -r kill -9 || true"
+
+                # 配置4C8GES实例
+                CONFIG_FILE="/opt/PostSilicon-Elasticsearch/elasticsearch-8.9.0/config/instance4C8G/elasticsearch.yml"
+                CONFIG_DIR="/opt/PostSilicon-Elasticsearch/elasticsearch-8.9.0/config/instance4C8G"
+
+                DATA_PATH="/data1/es/instance4C8G/data"
+                LOGS_PATH="/data1/es/instance4C8G/logs"
+
+                mkdir -p $CONFIG_DIR
+                mkdir -p $DATA_PATH
+                mkdir -p $LOGS_PATH
+                chown -R es:es /data1/es
+
+                cat > "$CONFIG_FILE" <<EOF
+                cluster.name: es_cluster
+                node.name: node0
+                network.host: $(hostname)
+                transport.port: 8200
+                http.port: 9200
+                path.data: $DATA_PATH
+                path.logs: $LOGS_PATH
+                cluster.initial_master_nodes: ["node0"]
+                xpack.security.enabled: false
+                xpack.security.transport.ssl.enabled: false
+
+                xpack.security.http.ssl.enabled: false
+
+                http.netty.worker_count: 4
+                http.cors.enabled: true
+                http.cors.allow-origin: '*'
+EOF
+
+                # 设置ES实例的JVM堆内存参数
+                
+                cp /opt/PostSilicon-Elasticsearch/elasticsearch-8.9.0/config/jvm.options $CONFIG_DIR
+                cp /opt/PostSilicon-Elasticsearch/elasticsearch-8.9.0/config/log4j2.properties $CONFIG_DIR
+
+                chown -R es:es \$CONFIG_DIR
+
+                echo -Xms8g >> $CONFIG_DIR/jvm.options
+                echo -Xmx8g >> $CONFIG_DIR/jvm.options
+                cpu_vendor=\$(dmidecode -t processor | grep 'Manufacturer'|uniq)
+                if [[ "\$cpu_vendor" =~ "Intel" ]]; then
+                    su - es -c 'ES_PATH_CONF=/opt/PostSilicon-Elasticsearch/elasticsearch-8.9.0/config/instance4C8G numactl -C $(seq -s, 20 2 $((20 + 2 * 3))) -m 0 /opt/PostSilicon-Elasticsearch/elasticsearch-8.9.0/bin/elasticsearch -d '
+                else
+                    su - es -c 'ES_PATH_CONF=/opt/PostSilicon-Elasticsearch/elasticsearch-8.9.0/config/instance4C8G numactl -C 20-23 -m 0 /opt/PostSilicon-Elasticsearch/elasticsearch-8.9.0/bin/elasticsearch -d '
+                fi
+
+                sleep 60
+                '''
+                node("${params.client_node}") {
+                    withEnv(["NODE_IP=${server_node}"]) {
+                        sh '''
+                        current_date=$(date +%Y%m%d)
+                        for((i=1;i<=3;i++));do                      
+                            numactl -C $(seq -s, 16 2 $((16 + 2 * 13))) --membind=0 esrally race --offline --pipeline=benchmark-only --track=http_logs --target-hosts=${NODE_IP}:9200 --include-tasks="delete-index,create-index,check-cluster-health,index-append,term,scroll" --report-format=markdown --race-id=$current_date --kill-running-processes --report-file="/home/esrally/$current_date/${NODE_IP}/SingleSocketDifferentInstance/instance4C8G/http_logs/low_load/test$i.md"
+                            sleep 60
+                        done
+                        '''
+                    }
+                }
+
+
+                sh '''
+                su - es -c "jps | awk '{print \$1}' | xargs -r kill -9 || true"
+                # 配置16C32GES实例
+                CONFIG_FILE="/opt/PostSilicon-Elasticsearch/elasticsearch-8.9.0/config/instance16C32G/elasticsearch.yml"
+                CONFIG_DIR="/opt/PostSilicon-Elasticsearch/elasticsearch-8.9.0/config/instance16C32G"
+
+                DATA_PATH="/data1/es/instance16C32G/data"
+                LOGS_PATH="/data1/es/instance16C32G/logs"
+
+                mkdir -p $CONFIG_DIR
+                mkdir -p $DATA_PATH
+                mkdir -p $LOGS_PATH
+                chown -R es:es /data1/es
+
+                cat > "$CONFIG_FILE" <<EOF
+                cluster.name: es_cluster
+                node.name: node0
+                network.host: $(hostname)
+                transport.port: 8200
+                http.port: 9200
+                path.data: $DATA_PATH
+                path.logs: $LOGS_PATH
+                cluster.initial_master_nodes: ["node0"]
+                xpack.security.enabled: false
+                xpack.security.transport.ssl.enabled: false
+
+                xpack.security.http.ssl.enabled: false
+
+                http.netty.worker_count: 4
+                http.cors.enabled: true
+                http.cors.allow-origin: '*'
+EOF
+
+                # 设置ES实例的JVM堆内存参数
+                
+                cp /opt/PostSilicon-Elasticsearch/elasticsearch-8.9.0/config/jvm.options $CONFIG_DIR
+                cp /opt/PostSilicon-Elasticsearch/elasticsearch-8.9.0/config/log4j2.properties $CONFIG_DIR
+                
+                chown -R es:es \$CONFIG_DIR
+
+                echo -Xms32g >> $CONFIG_DIR/jvm.options
+                echo -Xmx32g >> $CONFIG_DIR/jvm.options
+
+                cpu_vendor=\$(dmidecode -t processor | grep 'Manufacturer'|uniq)
+                if [[ "\$cpu_vendor" =~ "Intel" ]]; then
+                    su - es -c 'ES_PATH_CONF=/opt/PostSilicon-Elasticsearch/elasticsearch-8.9.0/config/instance16C32G numactl -C $(seq -s, 20 2 $((20 + 2 * 15))) -m 0 /opt/PostSilicon-Elasticsearch/elasticsearch-8.9.0/bin/elasticsearch -d ' 
+                else
+                    su - es -c 'ES_PATH_CONF=/opt/PostSilicon-Elasticsearch/elasticsearch-8.9.0/config/instance16C32G numactl -C 20-35 -m 0 /opt/PostSilicon-Elasticsearch/elasticsearch-8.9.0/bin/elasticsearch -d ' 
+                fi
+
+                sleep 60
+                '''
+
+                node("${params.client_node}") {
+                    withEnv(["NODE_IP=${server_node}"]) {
+                        sh '''
+                        current_date=$(date +%Y%m%d)
+                        /opt/changeLowLoadIRQ.sh
+                        for((i=1;i<=3;i++));do                      
+                            numactl -C $(seq -s, 16 2 $((16 + 2 * 13))) --membind=0 esrally race --offline --pipeline=benchmark-only --track=http_logs --target-hosts=${NODE_IP}:9200 --include-tasks="delete-index,create-index,check-cluster-health,index-append,term,scroll" --report-format=markdown --race-id=$current_date --kill-running-processes --report-file="/home/esrally/$current_date/${NODE_IP}/SingleSocketDifferentInstance/instance16C32G/http_logs/low_load/test$i.md"
+                            sleep 60
+                        done
+                        '''
+                    }
+                }
+            }
+        }
+        stage('Machine') {
+            steps {
+
+                sh '''
+                su - es -c "jps | awk '{print \$1}' | xargs -r kill -9 || true"
+                CONFIG_FILE="/opt/PostSilicon-Elasticsearch/elasticsearch-8.9.0/config/elasticsearch.yml"
+
+                cat > "$CONFIG_FILE" <<EOF
+                cluster.name: es_cluster
+                node.name: node0
+                network.host: $(hostname)
+                transport.port: 8200
+                http.port: 9200
+                path.data: /data1/es/data
+                path.logs: /data1/es/logs
+                cluster.initial_master_nodes: ["node0"]
+                xpack.security.enabled: false
+
+                xpack.security.transport.ssl.enabled: false
+
+                xpack.security.http.ssl.enabled: false
+
+                http.netty.worker_count: 4
+                http.cors.enabled: true
+                http.cors.allow-origin: '*'
+EOF
+
+                
+                echo -Xms16g >> /opt/PostSilicon-Elasticsearch/elasticsearch-8.9.0/config/jvm.options
+                echo -Xmx16g >> /opt/PostSilicon-Elasticsearch/elasticsearch-8.9.0/config/jvm.options
+
+                su - es -c '/opt/PostSilicon-Elasticsearch/elasticsearch-8.9.0/bin/elasticsearch -d'
+                sleep 60
+                '''
+                node("${params.client_node}") {
+                    withEnv(["NODE_IP=${server_node}"]) {
+                        sh '''
+                        current_date=$(date +%Y%m%d)
+                        for((i=1;i<=3;i++));do                      
+                            numactl -C $(seq -s, 16 2 $((16 + 2 * 13))) --membind=0 esrally race --offline --pipeline=benchmark-only --track=http_logs --target-hosts=${NODE_IP}:9200 --include-tasks="delete-index,create-index,check-cluster-health,index-append,term,scroll" --report-format=markdown --race-id=$current_date --kill-running-processes --report-file="/home/esrally/$current_date/${NODE_IP}/machine/http_logs/low_load/test$i.md"
+                            sleep 60
+                        done
+                        '''
+                    }
+                }
+            }
+        }
+        stage('disk') {
+            steps {
+                sh '''
+                su - es -c "jps | awk '{print \$1}' | xargs -r kill -9 || true"
+                if [[ \$(lsof -t "/data1") ]]; then
+                    lsof -t "/data1" |xargs kill -9
+                fi
+
+                if [[ \$(lsof -t "/data2") ]]; then
+                    lsof -t "/data2" |xargs kill -9
+                fi
+
+                sleep 60
+
+                '''
+                }
+        }
+    }
+}
+
