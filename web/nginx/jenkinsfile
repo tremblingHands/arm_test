@@ -142,10 +142,9 @@ pipeline {
                         wget -q http://10.1.180.190/web/nginx/to_nginx.tar.gz
                         tar zxf to_nginx.tar.gz
                         cd to_nginx
-                        ./setup.sh
+                        sh ./setup.sh
                         nic_name=`ifconfig | grep -B 1 "${server}" | head -1| awk -F": " '{print $1}'`
-                        ./nginx.sh "$nic_name" "${client}" all
-                        echo "====server ok=="
+                        sh ./nginx.sh "$nic_name" "${client}" all
                      '''
                     }
                 }
@@ -154,13 +153,12 @@ pipeline {
                     agent { label client } 
                     steps {
                     sh '''
-                         echo "====client start=="
                         rm wrk* -rf
                         wget -q http://10.1.180.190/web/nginx/wrk.tar.gz
                         tar zxf wrk.tar.gz
                         cd wrk
                         make -j
-                        ./wrk.sh "${server}" all
+                        sh ./wrk.sh "${server}" all
      
                      '''
                     }
