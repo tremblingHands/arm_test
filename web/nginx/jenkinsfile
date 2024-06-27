@@ -1,15 +1,19 @@
+def cpu_type = 'null'
+def numa_num = 0
+def need_reboot = 0
+def need_numactl = 0
+def bios_attributes = 'null'
 pipeline {
     agent {
         label "vmware-190"
         }
-    environment {
-        server =  "$params.server"
-        client =  "$params.client"
-        nic_name=  "$params.nic_name"
+    parameters {
+        string defaultValue: '10.1.180.8', name: 'server'
+        string defaultValue: '10.1.180.5', name: 'client'
     }
     //前提条件： 节点需要在Jenkins上托管，可连接
 	stages {
-	    stage('reinstall') {
+	    stage('reinstallOS') {
 	        steps {
 	            script {
 	                try {
@@ -20,10 +24,12 @@ pipeline {
 	                } catch (Exception e) {
 	                    //异常处理： 重装CentOS8
 	                    node("vmware-190") {
+	                        sh 'rm -rf $WORKSPACE/scripts' 
                             dir("scripts") {
                                 git credentialsId: 'Gitlab', url: 'git@gitlab.hj-micro.com:appsoftware/scripts.git'
                             }
                             sh '''
+                                set -x
                                 python3 scripts/bios/bios.py --ability reinstall --server_ip ${server} --reboot true --attributes 'CentOS8'
                                 echo "Waiting for reboot"
                                 sleep 1500s
@@ -42,88 +48,84 @@ pipeline {
                 }
             }
         }
-        stage('kernel') {
+        stage('updateKernel') {
             steps {
                 script {
-                    try {
-                        node(server) {
-                        sh '''
-                        need_reboot=0
-                        node_num=`numactl -H|grep cpus:|wc -l`
-                        if [ $node_num -lt 4 ]; then  
-                            need_reboot=1
-                        fi
-                                
-                        if [[ "$(uname -a | grep 5.10)" == "" ]]
-                        then
-                            cd /
-                            bash install_kernel.sh
-                            need_reboot=1
-                        fi
-                        
-                        if [ $need_reboot -eq 1 ]; then 
-                            exit 1
-                        fi
-                        '''
-                        //节点重启自己会有流程异常，抛出exit 1到异常处理中有其他机器启动重启流程
-                            }
-                        } catch (Exception e) {
-                            node("vmware-190") {
-                                dir("scripts") {
-                                    git credentialsId: 'Gitlab', url: 'git@gitlab.hj-micro.com:appsoftware/scripts.git'
-                                }
-                                sh '''
-                                node_num=`numactl -H|grep cpus:|wc -l`
-                                if [ $node_num -lt 4 ]; then  
-                                    if lscpu | grep "Ampere" >/dev/null
-                                    then
-                                        #Ampere
-                                        python3 scripts/bios/bios.py --ability set --server_ip ${server} --reboot true --attributes '{\"CPU003\":\"CPU003Monolithic\"}'
-                                    fi
-                                    
-                                    if lscpu | grep "Intel" >/dev/null
-                                    then
-                                        #Intel
-                                        python3 scripts/bios/bios.py --ability set --server_ip ${server} --reboot true --attributes '{\"SubNumaCluster\":\"2-Way\"}'
-                                    fi
-                                    
-                                    if lscpu | grep "AMD" >/dev/null
-                                    then
-                                        #AMD
-                                        python3 scripts/bios/bios.py --ability set --server_ip ${server} --reboot true --attributes '{\"NumaNodesPerSocket\":\"4\"}'
-                                    fi
-                                    if lscpu | grep "Kunpeng" >/dev/null
-                                    then
-                                        #kunpeng
-                                        python3 scripts/bios/bios.py --ability set --server_ip ${server} --reboot true --attributes '{\"RankInterleaving\":\"4-way Interleave\"}'
-                                        python3 scripts/bios/bios.py --ability set --server_ip ${server} --reboot true --attributes '{\"NUMAEn\":\"Enabled\"}'
-                                    fi
-                                    need_reboot=1
-                                fi
-                                
-                                python3 scripts/bios/bios.py --ability reboot --server_ip ${server} --reboot true --attributes '{}'
-                                sleep 300s
-                                for i in {1..10}
-                                    do
-                                        {
-                                            ping ${server} -c 3 && break 
-                                        } || {
-                                            sleep 120s 
-                                        }
-                                    done
-                                '''
-                            }
+                    node(server) {
+                    cpu_type = sh(script: 'lscpu | grep "^Model name:" | awk -F\':\' \'{print $2}\'', returnStdout: true).trim()
+                    echo "cpu_type=${cpu_type}"
+                    
+                    numa_num = sh(script: 'numactl -H|grep cpus:|wc -l', returnStdout: true)
+                    echo "numa_num=${numa_num}"
+                    
+                    kernel_version = sh(script: 'uname -r', returnStdout: true).trim()
+                    echo kernel_version
+                    if ( kernel_version.startsWith('5.10')) {
+                        echo "current Kernel is 5.10.0"
+                    } else {
+                        sh 'cd / && bash install_kernel.sh'
+                        need_reboot = 1
+                        echo "upgrade kernel done!"
                         }
                     }
                 }
             }
-        stage('gcc') {
+        }
+        stage('setBIOS') {
+            steps {
+                script {
+                    dir("scripts") {
+                            git credentialsId: 'Gitlab', url: 'git@gitlab.hj-micro.com:appsoftware/scripts.git'
+                        }
+                    if ( numa_num < '4' ) {
+                        if (cpu_type.startsWith("Ampere")) {
+                            sh(script: "python3 scripts/bios/bios.py --ability set --server_ip ${server} --reboot false --attributes \'{\"CPU003\":\"CPU003Monolithic\"}\'")
+                            echo "bios_attributes=${bios_attributes}"
+                        } else if (cpu_type.startsWith("Kunpeng")) {
+                            sh(script: "python3 scripts/bios/bios.py --ability set --server_ip ${server} --reboot false --attributes \'{\"RankInterleaving\":\"4-way Interleave\",\"NUMAEn\":\"Enabled\"}\'")
+                            echo "bios_attributes=${bios_attributes}"
+                        } else if (cpu_type.startsWith("Intel")) {
+                            sh(script: "python3 scripts/bios/bios.py --ability set --server_ip ${server} --reboot true --attributes \'{\"SubNumaCluster\":\"2-Way\"}\'")
+                            need_reboot = 0
+                            echo "bios_attributes=${bios_attributes}"
+                        } else if (cpu_type.startsWith("AMD")) {
+                            sh(script: "python3 scripts/bios/bios.py --ability set --server_ip ${server} --reboot true --attributes \'{\"NumaNodesPerSocket\":\"4\"}\'")
+                            need_reboot = 0
+                            echo "bios_attributes=${bios_attributes}"
+                        } else {
+                            echo "CPU type error!"
+                        }
+                        need_reboot = 1
+                        echo "numa upset done!"
+                    } else {
+                        echo "numa node bigger than 4" 
+                    }
+                    
+                    if ( need_reboot == 1 ) {
+                        echo "reboot"
+                        sh '''
+                            python3 scripts/bios/bios.py --ability reboot --server_ip ${server} --reboot true --attributes '{}'
+                            sleep 300s
+                            for i in {1..10}
+                            do
+                                {
+                                    ping ${server} -c 3 && break 
+                                } || {
+                                    sleep 120s 
+                                }
+                            done
+                        '''
+                    }
+                }
+            }
+        }
+
+        stage('ENVPrepare') {
             steps {
                 script {
                     node(server) {
                         sh '''
                             yum install -y gcc-toolset-10-gcc
-     
                         '''
                     } 
                 }
@@ -133,35 +135,50 @@ pipeline {
 			parallel {
                 stage('server_stage') {
                     agent { label server } 
-                        steps {
-                        sh '''
-                            source /opt/rh/gcc-toolset-10/enable
-                            rm to_nginx* -rf
-                            wget -q http://10.1.180.190/web/nginx/to_nginx.tar.gz
-                            tar zxf to_nginx.tar.gz
-                            cd to_nginx
-                            ./setup.sh
-                            ./nginx.sh "${nic_name}" "${client}" all
-         
-                         '''
-                        }
+                    steps {
+                    sh '''
+                        source /opt/rh/gcc-toolset-10/enable
+                        rm to_nginx* -rf
+                        wget -q http://10.1.180.190/web/nginx/to_nginx.tar.gz
+                        tar zxf to_nginx.tar.gz
+                        cd to_nginx
+                        sh ./setup.sh
+                        nic_name=`ifconfig | grep -B 1 "${server}" | head -1| awk -F": " '{print $1}'`
+                        sh ./nginx.sh "$nic_name" "${client}" all
+                     '''
+                    }
                 }
 
                 stage('client_stage ') {
                     agent { label client } 
-                        steps {
-                        sh '''
-                            rm wrk* -rf
-                            wget -q http://10.1.180.190/web/nginx/wrk.tar.gz
-                            tar zxf wrk.tar.gz
-                            cd wrk
-                            make -j
-                            ./wrk.sh "${server}" all
-         
-                         '''
-                        }
+                    steps {
+                    sh '''
+                        rm wrk* -rf
+                        wget -q http://10.1.180.190/web/nginx/wrk.tar.gz
+                        tar zxf wrk.tar.gz
+                        cd wrk
+                        make -j
+                        sh ./wrk.sh "${server}" all
+     
+                     '''
+                    }
                 }
             }
 	    }
+        stage('ResetBIOS') {
+            agent {label "vmware-190"}
+                steps {
+                    dir("scripts") {
+                        git credentialsId: 'Gitlab', url: 'git@gitlab.hj-micro.com:appsoftware/scripts.git'
+                    }
+                    sh '''
+                    cd scripts
+                    python3 bios/bios.py --ability reset --server_ip ${server} --reboot false
+                    python3 bios/bios.py --ability common --server_ip ${server} --reboot true --attributes '{}'
+                    echo "Waiting for reboot"
+                    '''
+                }
+        }
+        
 	}
 }
