@@ -1,422 +1,489 @@
-pipeline {
-    agent {
-        label "vmware-190"
-        }
-	options { disableConcurrentBuilds() }
-	environment {
-        os_metrics =  "$params.os_metrics"
-        memcached_metrics = "$params.memcached_metrics"
-        numa = "$params.numa"
-        cleanafterrun = "$params.cleanafterrun"
-    }
-	stages {
-	    stage('ServerEnvPrepare') {
-			agent {label "${server_node}"} 
-				steps {
-					sh '''
-					yum install openssl-devel automake autoconf unzip make gcc gcc-c++ libevent-devel numactl openssl-libs pcre-devel perl-Test-Simple perl-Test-Harness -y
+	pipeline {
+		agent {
+			label "vmware-190"
+			}
+		options { disableConcurrentBuilds() }
+		environment {
+			client =  "$params.client_node"
+			os_metrics =  "$params.os_metrics"
+			memcached_metrics = "$params.memcached_metrics"
+			numa = "$params.numa"
+			cleanafterrun = "$params.cleanafterrun"
+		}
+		stages {
+			stage('ServerEnvPrepare') {
+				agent {label "${server_node}"} 
+					steps {
+						sh '''
+						yum install openssl-devel automake autoconf unzip make gcc gcc-c++ libevent-devel numactl openssl-libs pcre-devel perl-Test-Simple perl-Test-Harness nc -y
 
-					pcinum=`ethtool -i $ethname|grep bus|awk '{print $2}'`
-					if [[ $(grep $ethname /proc/interrupts) ]];then
-					  cond=$ethname
-					else
-					  cond=$pcinum
-					fi
-					eth_node=$(cat /sys/class/net/${ethname}/device/numa_node)
-					nodes=`lscpu |grep "NUMA node("|awk '{print $3}'`
-					if [[ x$(uname -m) == x"aarch64" ]];then
-					  cpu_arr=($(numactl -H |grep "node $eth_node"|head -1|cut -d " " -f 4-$((${eth_combined}+3))))
-					elif [[ x$(uname -m) == x"x86_64" ]];then
-					  turbostat -n 1 > /tmp/turbo.txt
-					  arr=(`tail -n $(nproc) /tmp/turbo.txt |awk '{print $4}'`)
-					  cpu_arr=(${arr[@]:$[$[$(nproc)/$nodes]*${eth_node}]:${eth_combined}})
-					fi
-					systemctl stop irqbalance
-					ethtool -L $ethname combined ${eth_combined}
-					irq_num_list=`grep $cond /proc/interrupts|awk -F: '{print $1}'`
-					i=0
-					for irq in $irq_num_list
-					do
-					  echo "${cpu_arr[$i]} --> $irq"
-					  echo ${cpu_arr[$i]} > /proc/irq/$irq/smp_affinity_list
-					  i=$(($i+1))
-					  if [[ $i -eq ${#cpu_arr[@]} ]];then
+						pcinum=`ethtool -i $ethname|grep bus|awk '{print $2}'`
+						if [[ $(grep $ethname /proc/interrupts) ]];then
+						  cond=$ethname
+						else
+						  cond=$pcinum
+						fi
+						eth_node=$(cat /sys/class/net/${ethname}/device/numa_node)
+						nodes=`lscpu |grep "NUMA node("|awk '{print $3}'`
+						if [[ x$(uname -m) == x"aarch64" ]];then
+						  cpu_arr=($(numactl -H |grep "node $eth_node"|head -1|cut -d " " -f 4-$((${eth_combined}+3))))
+						elif [[ x$(uname -m) == x"x86_64" ]];then
+						  turbostat -n 1 > /tmp/turbo.txt
+						  arr=(`tail -n $(nproc) /tmp/turbo.txt |awk '{print $4}'`)
+						  cpu_arr=(${arr[@]:$[$[$(nproc)/$nodes]*${eth_node}]:${eth_combined}})
+						fi
+						systemctl stop irqbalance
+						ethtool -L $ethname combined ${eth_combined}
+						irq_num_list=`grep $cond /proc/interrupts|awk -F: '{print $1}'`
 						i=0
-					  else
-					    echo
-					  fi
-					done
-					
-					wget -q http://www.memcached.org/files/memcached-${memcached_version}.tar.gz
-					tar xvf memcached-${memcached_version}.tar.gz
-					cd memcached-${memcached_version}
-					./configure --prefix=/usr/local/memcached
-					make -j `nproc`
-					make -j `nproc` install
-					
-					'''
-				}
-		}
-		stage('ClientEnvPrepare') {
-			agent {label "${client_node}"} 
+						for irq in $irq_num_list
+						do
+						  echo "${cpu_arr[$i]} --> $irq"
+						  echo ${cpu_arr[$i]} > /proc/irq/$irq/smp_affinity_list
+						  i=$(($i+1))
+						  if [[ $i -eq ${#cpu_arr[@]} ]];then
+							i=0
+						  else
+							echo
+						  fi
+						done
+						
+						wget -q http://gitlab.hj-micro.com/yvan.chen/memcached/-/archive/${memcached_version}/memcached-${memcached_version}.zip
+						unzip -o memcached-${memcached_version}.zip
+						cd memcached-${memcached_version}
+						./autogen.sh
+						./configure --prefix=/usr/local/memcached
+						make -j `nproc`
+						make -j `nproc` install
+						
+						'''
+					}
+			}
+			stage('ClientEnvPrepare') {
 				steps {
-					sh '''
-					yum install openssl-devel automake autoconf unzip make gcc gcc-c++ libevent-devel numactl openssl-libs pcre-devel -y
-					wget -q https://github.com/RedisLabs/memtier_benchmark/archive/refs/tags/1.4.0.zip
-					unzip -o 1.4.0.zip
-					cd memtier_benchmark-1.4.0/
-					autoreconf -ivf
-					./configure
-					make -j`nproc` && make -j`nproc` install
-					'''
+					node(client) {
+						sh '''
+						yum install openssl-devel automake autoconf unzip make gcc gcc-c++ libevent-devel numactl openssl-libs pcre-devel mysql -y
+						wget -q http://gitlab.hj-micro.com/yvan.chen/memtier_benchmark/-/archive/1.4.0/memtier_benchmark-1.4.0.zip
+						unzip -o memtier_benchmark-1.4.0.zip
+						cd memtier_benchmark-1.4.0/
+						autoreconf -ivf
+						./configure
+						make -j`nproc` && make -j`nproc` install
+						'''
+					}
 				}
-		}
-		stage('单元全量测试') {
-			agent {label "${server_node}"} 
+			}
+		    stage('单元全量测试') {
+				agent {label "${server_node}"} 
+					steps {
+						sh '''
+						cd memcached-${memcached_version}
+						make test > /tmp/func_test_1.log
+						res=$(grep "All tests successful." /tmp/func_test_1.log)
+						[[ ${res} ]]
+						'''
+					}
+			}
+			stage('启动memcached') {
+				agent {label "${server_node}"} 
+					steps {
+						sh '''
+						if [[ $(ps aux|grep memcached|grep -v grep) ]]
+						then
+							ps aux|grep memcached|grep -v grep|awk '{print $2}' | xargs kill -9 
+						fi
+						/nas/yvan.chen/source/sshpass-1.06/sshpass-`uname -m` -p HongJunWei@2022 ssh 127.0.0.1 -o StrictHostKeychecking=no "/usr/local/memcached/bin/memcached -m ${memcached_memory} -t ${memcached_threads} -p ${port} -u root -c 102400 -d"
+						'''
+					}
+			}
+			stage('元素SET操作测试') {
 				steps {
-					sh '''
-					cd memcached-${memcached_version}
-					make test | tee -a /tmp/func_test_1.log
-					res=$(grep "All tests successful." /tmp/func_test_1.log)
-					[[ ${res} ]]
-					'''
+					node(client) {
+						sh '''
+						memtier_benchmark -s ${server_node} -p ${port} --ratio=1:0 --test-time=10 -P memcache_text > /tmp/func_test_2.log
+						'''
+					}
 				}
-		}
-		stage('启动memcached') {
-			agent {label "${server_node}"} 
+			}
+			stage('元素GET操作测试') {
 				steps {
-					sh '''
-					if [[ $(ps aux|grep memcached|grep -v grep) ]]
-					then
-						ps aux|grep memcached|grep -v grep|awk '{print $2}' | xargs kill -9 
-					fi
-					/nas/yvan.chen/source/sshpass-1.06/sshpass-`uname -m` -p HongJunWei@2022 ssh 127.0.0.1 -o StrictHostKeychecking=no "/usr/local/memcached/bin/memcached -m ${memcached_memory} -t ${memcached_threads} -p ${port} -u root -c 102400 -d"
-					'''
+					node(client) {
+						sh '''
+						memtier_benchmark -s ${server_node} -p ${port} --ratio=0:1 --test-time=10 -P memcache_text > /tmp/func_test_3.log
+						'''
+					}
 				}
-		}
-		stage('元素SET操作测试') {
-			agent {label "${client_node}"} 
+			}
+			stage('元素GETS操作测试') {
+				agent {label "${server_node}"} 
+					steps {
+						sh '''
+						echo -e "set key1 0 0 1\r\n1\r\nset key2 0 0 1\r\n2\r\ngets key1 key2" | nc ${server_node} ${port} > /tmp/func_test_4.log
+						'''
+					}
+			}
+			stage('元素GAT操作测试') {
+				agent {label "${server_node}"} 
+					steps {
+						sh '''
+						echo -e "set key1 0 0 1\r\n1\r\nset key2 0 0 1\r\n2\r\ngat 1 key1" | nc ${server_node} ${port} > /tmp/func_test_5.log
+						'''
+					}
+			}
+			stage('元素GATS操作测试') {
+				agent {label "${server_node}"} 
+					steps {
+						sh '''
+						echo -e "set key1 0 0 1\r\n1\r\nset key2 0 0 1\r\n2\r\ngats 1 key1 1 key2" | nc ${server_node} ${port} > /tmp/func_test_6.log
+						'''
+					}
+			}
+			stage('元素ADD操作测试') {
+				agent {label "${server_node}"} 
+					steps {
+						sh '''
+						echo -e "add key3 0 0 1\r\n1\r\nget key3" | nc ${server_node} ${port} > /tmp/func_test_7.log
+						'''
+					}
+			}
+			stage('元素APPEND操作测试') {
+				agent {label "${server_node}"} 
+					steps {
+						sh '''
+						echo -e "set key4 0 0 1\r\na\r\nget key4\r\nappend key4 0 0 1\r\nb\r\nget key4" | nc ${server_node} ${port} > /tmp/func_test_8.log
+						'''
+					}
+			}
+			stage('元素PREPEND操作测试') {
+				agent {label "${server_node}"} 
+					steps {
+						sh '''
+						echo -e "set key5 0 0 1\r\na\r\nget key5\r\nprepend key5 0 0 1\r\nb\r\nget key5" | nc ${server_node} ${port} > /tmp/func_test_9.log
+						'''
+					}
+			}
+			stage('元素DELETE操作测试') {
+				agent {label "${server_node}"} 
+					steps {
+						sh '''
+						echo -e "set key6 0 0 1\r\na\r\nget key6\r\ndelete key6\r\nget key6" | nc ${server_node} ${port} > /tmp/func_test_10.log
+						'''
+					}
+			}
+			stage('元素REPLACE操作测试') {
+				agent {label "${server_node}"} 
+					steps {
+						sh '''
+						echo -e "set key7 0 0 1\r\n1\r\nget key7\r\nreplace key7 0 0 1\r\n2\r\nget key7" | nc ${server_node} ${port} > /tmp/func_test_11.log
+						'''
+					}
+			}
+			stage('元素TOUCH操作测试') {
+				agent {label "${server_node}"} 
+					steps {
+						sh '''
+						echo -e "set key8 0 0 1\r\n1\r\nget key8\r\ntouch key8 111\r\nget key8" | nc ${server_node} ${port} > /tmp/func_test_12.log
+						'''
+					}
+			}
+			stage('元素CAS操作测试') {
+				agent {label "${server_node}"} 
+					steps {
+						sh '''
+						echo -e "set key100 0 0 3\r\naaa\r\nget key100\r\ncas key100 0 0 3 1\r\nbbb\r\nget key100" | nc ${server_node} ${port} > /tmp/func_test_13.log
+						'''
+					}
+			}
+			stage('元素INCR操作测试') {
+				agent {label "${server_node}"} 
+					steps {
+						sh '''
+						echo -e "set key10 0 0 1\r\n5\r\nget key10\r\nincr key10 5\r\nget key10" | nc ${server_node} ${port} > /tmp/func_test_14.log
+						'''
+					}
+			}
+			stage('元素DECR操作测试') {
+				agent {label "${server_node}"} 
+					steps {
+						sh '''
+						echo -e "set key11 0 0 1\r\n5\r\nget key11\r\ndecr key11 5\r\nget key11" | nc ${server_node} ${port} > /tmp/func_test_15.log
+						'''
+					}
+			}
+			stage('重启memcached') {
+				agent {label "${server_node}"} 
+					steps {
+						sh '''
+						if [[ $(ps aux|grep memcached|grep -v grep) ]]
+						then
+							ps aux|grep memcached|grep -v grep|awk '{print $2}' | xargs kill -9 
+						fi
+						echo 3 > /proc/sys/vm/drop_caches
+						eth_node=$(cat /sys/class/net/${ethname}/device/numa_node)
+						nodes=`lscpu |grep "NUMA node("|awk '{print $3}'`
+						if [[ x$(uname -m) == x"aarch64" ]];then
+						  cpus=$(numactl -H |grep "node $eth_node"|head -1|cut -d " " -f $[4+${eth_combined}]-$[$[$[4+${eth_combined}]-1]+${memcached_threads}]|tr ' ' ',')
+						elif [[ x$(uname -m) == x"x86_64" ]];then
+						  turbostat -n 1 > /tmp/turbo.txt
+						  arr=(`tail -n $(nproc) /tmp/turbo.txt |awk '{print $4}'`)
+						  cpus=$(echo ${arr[@]:$[$[$[$(nproc)/$nodes]*${eth_node}]+${eth_combined}]:${memcached_threads}}|tr ' ' ',')
+						fi
+						/nas/yvan.chen/source/sshpass-1.06/sshpass-`uname -m` -p HongJunWei@2022 ssh 127.0.0.1 -o StrictHostKeychecking=no "numactl -C ${cpus} -m ${eth_node} /usr/local/memcached/bin/memcached -m ${memcached_memory} -t ${memcached_threads} -p ${port} -u root -c 102400 -P /tmp/${port}.pid -d"
+						'''
+					}
+			}
+			stage('50 Pipline性能测试') {
 				steps {
-					sh '''
-					memtier_benchmark -s ${server_node} -p ${port} --ratio=1:0 --test-time=10 -P memcache_text | tee -a /tmp/func_test_2.log
-					'''
+					node(client) {
+						sh '''
+						echo -e "flush_all" | nc ${server_node} ${port} > /tmp/perf_test_1.log
+						memtier_benchmark -s ${server_node} -p ${port} --ratio=${ratio} --data-size=${datasize} --test-time=${testtime} -P ${protocol} -c ${clients} -t ${threads} --pipeline=50 -x ${perf_test_loop} --hide-histogram > /tmp/perf_test_1.log
+						'''
+					}
 				}
-		}
-		stage('元素GET操作测试') {
-			agent {label "${client_node}"} 
+			}
+			stage('100 Pipline性能测试') {
 				steps {
-					sh '''
-					memtier_benchmark -s ${server_node} -p ${port} --ratio=0:1 --test-time=10 -P memcache_text | tee -a /tmp/func_test_3.log
-					'''
+					node(client) {
+						sh '''
+						echo -e "flush_all" | nc ${server_node} ${port} > /tmp/perf_test_2.log
+						memtier_benchmark -s ${server_node} -p ${port} --ratio=${ratio} --data-size=${datasize} --test-time=${testtime} -P ${protocol} -c ${clients} -t ${threads} --pipeline=100 -x ${perf_test_loop} --hide-histogram > /tmp/perf_test_2.log
+						'''
+					}
 				}
-		}
-		stage('元素GETS操作测试') {
-			agent {label "${server_node}"} 
+			}
+			stage('150 Pipline性能测试') {
 				steps {
-					sh '''
-					echo -e "set key1 0 0 1\r\n1\r\nset key2 0 0 1\r\n2\r\ngets key1 key2" | nc ${server_node} ${port} | tee -a /tmp/func_test_4.log
-					'''
+					node(client) {
+						sh '''
+						echo -e "flush_all" | nc ${server_node} ${port} > /tmp/perf_test_3.log
+						memtier_benchmark -s ${server_node} -p ${port} --ratio=${ratio} --data-size=${datasize} --test-time=${testtime} -P ${protocol} -c ${clients} -t ${threads} --pipeline=150 -x ${perf_test_loop} --hide-histogram > /tmp/perf_test_3.log
+						'''
+					}
 				}
-		}
-		stage('元素GAT操作测试') {
-			agent {label "${server_node}"} 
+			}
+			stage('200 Pipline性能测试') {
 				steps {
-					sh '''
-					echo -e "set key1 0 0 1\r\n1\r\nset key2 0 0 1\r\n2\r\ngat 1 key1" | nc ${server_node} ${port} | tee -a /tmp/func_test_5.log
-					'''
+					node(client) {
+						sh '''
+						echo -e "flush_all" | nc ${server_node} ${port} > /tmp/perf_test_4.log
+						memtier_benchmark -s ${server_node} -p ${port} --ratio=${ratio} --data-size=${datasize} --test-time=${testtime} -P ${protocol} -c ${clients} -t ${threads} --pipeline=200 -x ${perf_test_loop} --hide-histogram > /tmp/perf_test_4.log
+						'''
+					}
 				}
-		}
-		stage('元素GATS操作测试') {
-			agent {label "${server_node}"} 
+			}
+			stage('memcache_binary协议性能测试') {
 				steps {
-					sh '''
-					echo -e "set key1 0 0 1\r\n1\r\nset key2 0 0 1\r\n2\r\ngats 1 key1 1 key2" | nc ${server_node} ${port} | tee -a /tmp/func_test_6.log
-					'''
+					node(client) {
+						sh '''
+						echo -e "flush_all" | nc ${server_node} ${port} > /tmp/perf_test_5.log
+						memtier_benchmark -s ${server_node} -p ${port} --ratio=${ratio} --data-size=${datasize} --test-time=${testtime} -P memcache_binary -c ${clients} -t ${threads} -x ${perf_test_loop} --hide-histogram > /tmp/perf_test_5.log
+						'''
+					}
 				}
-		}
-		stage('元素ADD操作测试') {
-			agent {label "${server_node}"} 
+			}
+			stage('随机数据性能测试') {
 				steps {
-					sh '''
-					echo -e "add key3 0 0 1\r\n1\r\nget key3" | nc ${server_node} ${port} | tee -a /tmp/func_test_7.log
-					'''
+					node(client) {
+						sh '''
+						echo -e "flush_all" | nc ${server_node} ${port} > /tmp/perf_test_6.log
+						memtier_benchmark -s ${server_node} -p ${port} --ratio=${ratio}  -R --data-size-range=3-1048576 --data-size-pattern=R --test-time=${testtime} -P ${protocol} -c ${clients} -t ${threads} -x ${perf_test_loop} --hide-histogram > /tmp/perf_test_6.log
+						'''
+					}
 				}
-		}
-		stage('元素APPEND操作测试') {
-			agent {label "${server_node}"} 
+			}
+			stage('单NUMA启动memcached') {
+				agent {label "${server_node}"} 
+					steps {
+						sh '''
+						if [[ $(ps aux|grep memcached|grep -v grep) ]]
+						then
+							ps aux|grep memcached|grep -v grep|awk '{print $2}' | xargs kill -9 
+						fi
+						echo 3 > /proc/sys/vm/drop_caches
+						eth_node=$(cat /sys/class/net/${ethname}/device/numa_node)
+						nodes=`lscpu |grep "NUMA node("|awk '{print $3}'`
+						if [[ x$(uname -m) == x"aarch64" ]];then
+						  cpus=$(numactl -H |grep "node $eth_node"|head -1|cut -d " " -f $[4+${eth_combined}]-$[$[$[4+${eth_combined}]-1]+${memcached_threads}]|tr ' ' ',')
+						elif [[ x$(uname -m) == x"x86_64" ]];then
+						  turbostat -n 1 > /tmp/turbo.txt
+						  arr=(`tail -n $(nproc) /tmp/turbo.txt |awk '{print $4}'`)
+						  cpus=$(echo ${arr[@]:$[$[$[$(nproc)/$nodes]*${eth_node}]+${eth_combined}]:${memcached_threads}}|tr ' ' ',')
+						fi
+						/nas/yvan.chen/source/sshpass-1.06/sshpass-`uname -m` -p HongJunWei@2022 ssh 127.0.0.1 -o StrictHostKeychecking=no "numactl -C ${cpus} -m ${eth_node} /usr/local/memcached/bin/memcached -m ${memcached_memory} -t ${memcached_threads} -p ${port} -u root -c 102400 -P /tmp/${port}.pid -d"
+						'''
+					}
+			}
+			stage('单NUMA性能测试') {
 				steps {
-					sh '''
-					echo -e "set key4 0 0 1\r\na\r\nget key4\r\nappend key4 0 0 1\r\nb\r\nget key4" | nc ${server_node} ${port} | tee -a /tmp/func_test_8.log
-					'''
+					node(client) {
+						sh '''
+						memtier_benchmark -s ${server_node} -p ${port} --ratio=${ratio} --data-size=${datasize} --test-time=${testtime} -P ${protocol} -c ${clients} -t ${threads} -x ${perf_test_loop} --hide-histogram > /tmp/perf_test_7.log
+						'''
+					}
 				}
-		}
-		stage('元素PREPEND操作测试') {
-			agent {label "${server_node}"} 
+			}
+			stage('跨NUMA启动memcached') {
+				agent {label "${server_node}"} 
+					steps {
+						sh '''
+						if [[ $(ps aux|grep memcached|grep -v grep) ]]
+						then
+							ps aux|grep memcached|grep -v grep|awk '{print $2}' | xargs kill -9 
+						fi
+						echo 3 > /proc/sys/vm/drop_caches
+						eth_node=$(cat /sys/class/net/${ethname}/device/numa_node)
+						if (($eth_node % 2 == 0)); then
+							node=$((${eth_node}+1))
+						else
+							node=$((${eth_node}-1))
+						fi
+						nodes=`lscpu |grep "NUMA node("|awk '{print $3}'`
+						if [[ x$(uname -m) == x"aarch64" ]];then
+						  cpus=$(numactl -H |grep "node $node"|head -1|awk -F":" '{print $2}'|sed 's/^ //g'|cut -d " " -f 1-${memcached_threads}|tr ' ' ',')
+						elif [[ x$(uname -m) == x"x86_64" ]];then
+						  turbostat -n 1 > /tmp/turbo.txt
+						  arr=(`tail -n $(nproc) /tmp/turbo.txt |awk '{print $4}'`)
+						  cpus=$(echo ${arr[@]:$[$[$(nproc)/$nodes]*${node}]:${memcached_threads}}|tr ' ' ',')
+						fi
+						
+						/nas/yvan.chen/source/sshpass-1.06/sshpass-`uname -m` -p HongJunWei@2022 ssh 127.0.0.1 -o StrictHostKeychecking=no "numactl -C ${cpus} -m ${node} /usr/local/memcached/bin/memcached -m ${memcached_memory} -t ${memcached_threads} -p ${port} -u root -c 102400 -P /tmp/${port}.pid -d"
+						'''
+					}
+			}
+			stage('跨NUMA性能测试') {
 				steps {
-					sh '''
-					echo -e "set key5 0 0 1\r\na\r\nget key5\r\nprepend key5 0 0 1\r\nb\r\nget key5" | nc ${server_node} ${port} | tee -a /tmp/func_test_9.log
-					'''
+					node(client) {
+						sh '''
+						memtier_benchmark -s ${server_node} -p ${port} --ratio=${ratio} --data-size=${datasize} --test-time=${testtime} -P ${protocol} -c ${clients} -t ${threads} -x ${perf_test_loop} --hide-histogram > /tmp/perf_test_8.log
+						'''
+					}
 				}
-		}
-		stage('元素DELETE操作测试') {
-			agent {label "${server_node}"} 
+			}
+			stage('跨SOCKET启动memcached') {
+				agent {label "${server_node}"} 
+					steps {
+						sh '''
+						if [[ $(ps aux|grep memcached|grep -v grep) ]]
+						then
+							ps aux|grep memcached|grep -v grep|awk '{print $2}' | xargs kill -9 
+						fi
+						echo 3 > /proc/sys/vm/drop_caches
+						sockets=$(lscpu | grep "Socket("|awk '{print $NF}')
+						numas=$(lscpu | grep "NUMA node("|awk '{print $NF}')
+						numas_per_socket=$((${numas}/${sockets}))
+						eth_node=$(cat /sys/class/net/${ethname}/device/numa_node)
+						eth_socket=$((${eth_node}/${numas_per_socket}))
+						if (($eth_socket % 2 == 0)); then
+							socket=$((${eth_socket}+1))
+						else
+							socket=$((${eth_socket}-1))
+						fi
+						node=$((${numas_per_socket}*${socket}))
+						nodes=`lscpu |grep "NUMA node("|awk '{print $3}'`
+						if [[ x$(uname -m) == x"aarch64" ]];then
+						  cpus=$(numactl -H |grep "node $node"|head -1|awk -F":" '{print $2}'|sed 's/^ //g'|cut -d " " -f 1-${memcached_threads}|tr ' ' ',')
+						elif [[ x$(uname -m) == x"x86_64" ]];then
+						  turbostat -n 1 > /tmp/turbo.txt
+						  arr=(`tail -n $(nproc) /tmp/turbo.txt |awk '{print $4}'`)
+						  cpus=$(echo ${arr[@]:$[$[$(nproc)/$nodes]*${node}]:${memcached_threads}}|tr ' ' ',')
+						fi
+						/nas/yvan.chen/source/sshpass-1.06/sshpass-`uname -m` -p HongJunWei@2022 ssh 127.0.0.1 -o StrictHostKeychecking=no "numactl -C ${cpus} -m ${node} /usr/local/memcached/bin/memcached -m ${memcached_memory} -t ${memcached_threads} -p ${port} -u root -c 102400 -P /tmp/${port}.pid -d"
+						'''
+					}
+			}
+			stage('跨SOCKET性能测试') {
 				steps {
-					sh '''
-					echo -e "set key6 0 0 1\r\na\r\nget key6\r\ndelete key6\r\nget key6" | nc ${server_node} ${port} | tee -a /tmp/func_test_10.log
-					'''
+					node(client) {
+						sh '''
+						memtier_benchmark -s ${server_node} -p ${port} --ratio=${ratio} --data-size=${datasize} --test-time=${testtime} -P ${protocol} -c ${clients} -t ${threads} -x ${perf_test_loop} --hide-histogram > /tmp/perf_test_9.log
+						'''
+					}
 				}
-		}
-		stage('元素REPLACE操作测试') {
-			agent {label "${server_node}"} 
+			}
+			stage('单NUMA重启memcached') {
+				agent {label "${server_node}"} 
+					steps {
+						sh '''
+						if [[ $(ps aux|grep memcached|grep -v grep) ]]
+						then
+							ps aux|grep memcached|grep -v grep|awk '{print $2}' | xargs kill -9 
+						fi
+						echo 3 > /proc/sys/vm/drop_caches
+						eth_node=$(cat /sys/class/net/${ethname}/device/numa_node)
+						nodes=`lscpu |grep "NUMA node("|awk '{print $3}'`
+						if [[ x$(uname -m) == x"aarch64" ]];then
+						  cpus=$(numactl -H |grep "node $eth_node"|head -1|cut -d " " -f $[4+${eth_combined}]-$[$[$[4+${eth_combined}]-1]+${memcached_threads}]|tr ' ' ',')
+						elif [[ x$(uname -m) == x"x86_64" ]];then
+						  turbostat -n 1 > /tmp/turbo.txt
+						  arr=(`tail -n $(nproc) /tmp/turbo.txt |awk '{print $4}'`)
+						  cpus=$(echo ${arr[@]:$[$[$[$(nproc)/$nodes]*${eth_node}]+${eth_combined}]:${memcached_threads}}|tr ' ' ',')
+						fi
+						/nas/yvan.chen/source/sshpass-1.06/sshpass-`uname -m` -p HongJunWei@2022 ssh 127.0.0.1 -o StrictHostKeychecking=no "numactl -C ${cpus} -m ${eth_node} /usr/local/memcached/bin/memcached -m ${memcached_memory} -t ${memcached_threads} -p ${port} -u root -c 102400 -N ${memcached_threads} -P /tmp/${port}.pid -d"
+						'''
+					}
+			}
+			stage('优化累加性能测试') {
 				steps {
+					node(client) {
+						sh '''
+						memtier_benchmark -s ${server_node} -p ${port} --ratio=${ratio} --data-size=${datasize} --test-time=${testtime} -P ${protocol} -c ${clients} -t ${threads} -x ${perf_test_loop} --hide-histogram > /tmp/perf_test_10.log
+						'''
+					}
+				}
+			}
+		}
+		post {
+			success {
+				node(client) {
+					// 从标准输出log获取各测试用例性能，归档至数据库;
+					// 默认用户根目录下已存在MySQL客户端程序mysql和Jenkins客户端程序jenkins-cli.jar;
 					sh '''
-					echo -e "set key7 0 0 1\r\n1\r\nget key7\r\nreplace key7 0 0 1\r\n2\r\nget key7" | nc ${server_node} ${port} | tee -a /tmp/func_test_11.log
+						yum install mysql -y
+						# 业务常量和复用变量定义
+						DB_HOST="10.1.180.190"
+						DB_USER="root"
+						DB_PASS="mysql"
+						DB_NAME="memcached"
+						LOG_URL="\\"${BUILD_URL}console\\""
+						SQL_INSERT=""
+						LOG_FILTER=""
+						RPS=-1
+						P50=-1
+						
+						# 获取std log
+						export JAVA_HOME=/usr/lib/jvm/java-11
+						export PATH=$JAVA_HOME/bin:$PATH
+						wget -q http://10.1.180.188:8080/jnlpJars/jenkins-cli.jar
+						java -jar jenkins-cli.jar -s http://10.1.180.188:8080/ console ${JOB_NAME} > memcached.log
+
+						# 功能用例结果入库，无报错情况下，说明用例执行成功
+						for test_case_id in {1..15}
+						do
+							SQL_INSERT="INSERT INTO naqu (test_case_id, OPS_OR_UT, AVG_Latency, log_url) VALUES (${test_case_id}, 1, 0, ${LOG_URL})"
+							mysql -h$DB_HOST -u$DB_USER -p$DB_PASS $DB_NAME -e \"${SQL_INSERT}\"
+						done
+						
+						
+						# 性能数据入库
+						test_case_id=16
+						for i in {1..10}
+						do
+							OPS=$(grep -A 8 AVERA /tmp/perf_test_${i}.log|grep Totals|awk '{print $2}')
+							LAT=$(grep -A 8 AVERA /tmp/perf_test_${i}.log|grep Totals|awk '{print $5}')
+							SQL_INSERT="INSERT INTO naqu (test_case_id, OPS_OR_UT, AVG_Latency, log_url) VALUES (${test_case_id}, ${OPS}, ${LAT}, ${LOG_URL})"
+							mysql -h$DB_HOST -u$DB_USER -p$DB_PASS $DB_NAME -e \"$SQL_INSERT\"
+							let test_case_id++
+						done
+						
+						# 关闭连接
+						mysql -h$DB_HOST -u$DB_USER -p$DB_PASS $DB_NAME -e "exit"
+						
+						# 清理缓存log和jar包
+						rm -f memcached.log jenkins-cli.jar /tmp/perf_test*
 					'''
 				}
-		}
-		stage('元素TOUCH操作测试') {
-			agent {label "${server_node}"} 
-				steps {
-					sh '''
-					echo -e "set key8 0 0 1\r\n1\r\nget key8\r\ntouch key8 111\r\nget key8" | nc ${server_node} ${port} | tee -a /tmp/func_test_12.log
-					'''
-				}
-		}
-		stage('元素CAS操作测试') {
-			agent {label "${server_node}"} 
-				steps {
-					sh '''
-					echo -e "set key100 0 0 3\r\naaa\r\nget key100\r\ncas key100 0 0 3 1\r\nbbb\r\nget key100" | nc ${server_node} ${port} | tee -a /tmp/func_test_13.log
-					'''
-				}
-		}
-		stage('元素INCR操作测试') {
-			agent {label "${server_node}"} 
-				steps {
-					sh '''
-					echo -e "set key10 0 0 1\r\n5\r\nget key10\r\nincr key10 5\r\nget key10" | nc ${server_node} ${port} | tee -a /tmp/func_test_14.log
-					'''
-				}
-		}
-		stage('元素DECR操作测试') {
-			agent {label "${server_node}"} 
-				steps {
-					sh '''
-					echo -e "set key11 0 0 1\r\n5\r\nget key11\r\ndecr key11 5\r\nget key11" | nc ${server_node} ${port} | tee -a /tmp/func_test_15.log
-					'''
-				}
-		}
-		stage('重启memcached') {
-			agent {label "${server_node}"} 
-				steps {
-					sh '''
-					if [[ $(ps aux|grep memcached|grep -v grep) ]]
-					then
-						ps aux|grep memcached|grep -v grep|awk '{print $2}' | xargs kill -9 
-					fi
-					echo 3 > /proc/sys/vm/drop_caches
-					eth_node=$(cat /sys/class/net/${ethname}/device/numa_node)
-					nodes=`lscpu |grep "NUMA node("|awk '{print $3}'`
-					if [[ x$(uname -m) == x"aarch64" ]];then
-					  cpus=$(numactl -H |grep "node $eth_node"|head -1|cut -d " " -f $[4+${eth_combined}]-$[$[$[4+${eth_combined}]-1]+${memcached_threads}]|tr ' ' ',')
-					elif [[ x$(uname -m) == x"x86_64" ]];then
-					  turbostat -n 1 > /tmp/turbo.txt
-					  arr=(`tail -n $(nproc) /tmp/turbo.txt |awk '{print $4}'`)
-					  cpus=$(echo ${arr[@]:$[$[$[$(nproc)/$nodes]*${eth_node}]+${eth_combined}]:${memcached_threads}}|tr ' ' ',')
-					fi
-					/nas/yvan.chen/source/sshpass-1.06/sshpass-`uname -m` -p HongJunWei@2022 ssh 127.0.0.1 -o StrictHostKeychecking=no "numactl -C ${cpus} -m ${eth_node} /usr/local/memcached/bin/memcached -m ${memcached_memory} -t ${memcached_threads} -p ${port} -u root -c 102400 -P /tmp/${port}.pid -d"
-					'''
-				}
-		}
-		stage('50 Pipline性能测试') {
-			agent {label "${client_node}"} 
-				steps {
-					sh '''
-					echo -e "flush_all" | nc ${server_node} ${port} | tee -a /tmp/perf_test_1.log
-					memtier_benchmark -s ${server_node} -p ${port} --ratio=${ratio} --data-size=${datasize} --test-time=${testtime} -P ${protocol} -c ${clients} -t ${threads} --pipeline=50 -x ${perf_test_loop} --hide-histogram | tee -a /tmp/perf_test_1.log
-					'''
-				}
-		}
-		stage('100 Pipline性能测试') {
-			agent {label "${client_node}"} 
-				steps {
-					sh '''
-					echo -e "flush_all" | nc ${server_node} ${port} | tee -a /tmp/perf_test_2.log
-					memtier_benchmark -s ${server_node} -p ${port} --ratio=${ratio} --data-size=${datasize} --test-time=${testtime} -P ${protocol} -c ${clients} -t ${threads} --pipeline=100 -x ${perf_test_loop} --hide-histogram | tee -a /tmp/perf_test_2.log
-					'''
-				}
-		}
-		stage('150 Pipline性能测试') {
-			agent {label "${client_node}"} 
-				steps {
-					sh '''
-					echo -e "flush_all" | nc ${server_node} ${port} | tee -a /tmp/perf_test_3.log
-					memtier_benchmark -s ${server_node} -p ${port} --ratio=${ratio} --data-size=${datasize} --test-time=${testtime} -P ${protocol} -c ${clients} -t ${threads} --pipeline=150 -x ${perf_test_loop} --hide-histogram | tee -a /tmp/perf_test_3.log
-					'''
-				}
-		}
-		stage('200 Pipline性能测试') {
-			agent {label "${client_node}"} 
-				steps {
-					sh '''
-					echo -e "flush_all" | nc ${server_node} ${port} | tee -a /tmp/perf_test_4.log
-					memtier_benchmark -s ${server_node} -p ${port} --ratio=${ratio} --data-size=${datasize} --test-time=${testtime} -P ${protocol} -c ${clients} -t ${threads} --pipeline=200 -x ${perf_test_loop} --hide-histogram | tee -a /tmp/perf_test_4.log
-					'''
-				}
-		}
-		stage('memcache_binary协议性能测试') {
-			agent {label "${client_node}"} 
-				steps {
-					sh '''
-					echo -e "flush_all" | nc ${server_node} ${port} | tee -a /tmp/perf_test_5.log
-					memtier_benchmark -s ${server_node} -p ${port} --ratio=${ratio} --data-size=${datasize} --test-time=${testtime} -P memcache_binary -c ${clients} -t ${threads} -x ${perf_test_loop} --hide-histogram | tee -a /tmp/perf_test_5.log
-					'''
-				}
-		}
-		stage('随机数据性能测试') {
-			agent {label "${client_node}"} 
-				steps {
-					sh '''
-					echo -e "flush_all" | nc ${server_node} ${port} | tee -a /tmp/perf_test_6.log
-					memtier_benchmark -s ${server_node} -p ${port} --ratio=${ratio}  -R --data-size-range=3-1048576 --data-size-pattern=R --test-time=${testtime} -P ${protocol} -c ${clients} -t ${threads} -x ${perf_test_loop} --hide-histogram | tee -a /tmp/perf_test_6.log
-					'''
-				}
-		}
-		stage('单NUMA启动memcached') {
-			agent {label "${server_node}"} 
-				steps {
-					sh '''
-					if [[ $(ps aux|grep memcached|grep -v grep) ]]
-					then
-						ps aux|grep memcached|grep -v grep|awk '{print $2}' | xargs kill -9 
-					fi
-					echo 3 > /proc/sys/vm/drop_caches
-					eth_node=$(cat /sys/class/net/${ethname}/device/numa_node)
-					nodes=`lscpu |grep "NUMA node("|awk '{print $3}'`
-					if [[ x$(uname -m) == x"aarch64" ]];then
-					  cpus=$(numactl -H |grep "node $eth_node"|head -1|cut -d " " -f $[4+${eth_combined}]-$[$[$[4+${eth_combined}]-1]+${memcached_threads}]|tr ' ' ',')
-					elif [[ x$(uname -m) == x"x86_64" ]];then
-					  turbostat -n 1 > /tmp/turbo.txt
-					  arr=(`tail -n $(nproc) /tmp/turbo.txt |awk '{print $4}'`)
-					  cpus=$(echo ${arr[@]:$[$[$[$(nproc)/$nodes]*${eth_node}]+${eth_combined}]:${memcached_threads}}|tr ' ' ',')
-					fi
-					/nas/yvan.chen/source/sshpass-1.06/sshpass-`uname -m` -p HongJunWei@2022 ssh 127.0.0.1 -o StrictHostKeychecking=no "numactl -C ${cpus} -m ${eth_node} /usr/local/memcached/bin/memcached -m ${memcached_memory} -t ${memcached_threads} -p ${port} -u root -c 102400 -P /tmp/${port}.pid -d"
-					'''
-				}
-		}
-		stage('单NUMA性能测试') {
-			agent {label "${client_node}"} 
-				steps {
-					sh '''
-					memtier_benchmark -s ${server_node} -p ${port} --ratio=${ratio} --data-size=${datasize} --test-time=${testtime} -P ${protocol} -c ${clients} -t ${threads} -x ${perf_test_loop} --hide-histogram | tee -a /tmp/perf_test_7.log
-					'''
-				}
-		}
-		stage('跨NUMA启动memcached') {
-			agent {label "${server_node}"} 
-				steps {
-					sh '''
-					if [[ $(ps aux|grep memcached|grep -v grep) ]]
-					then
-						ps aux|grep memcached|grep -v grep|awk '{print $2}' | xargs kill -9 
-					fi
-					echo 3 > /proc/sys/vm/drop_caches
-					eth_node=$(cat /sys/class/net/${ethname}/device/numa_node)
-					if (($eth_node % 2 == 0)); then
-						node=$((${eth_node}+1))
-					else
-						node=$((${eth_node}-1))
-					fi
-					nodes=`lscpu |grep "NUMA node("|awk '{print $3}'`
-					if [[ x$(uname -m) == x"aarch64" ]];then
-					  cpus=$(numactl -H |grep "node $node"|head -1|awk -F":" '{print $2}'|sed 's/^ //g'|cut -d " " -f 1-${memcached_threads}|tr ' ' ',')
-					elif [[ x$(uname -m) == x"x86_64" ]];then
-					  turbostat -n 1 > /tmp/turbo.txt
-					  arr=(`tail -n $(nproc) /tmp/turbo.txt |awk '{print $4}'`)
-					  cpus=$(echo ${arr[@]:$[$[$(nproc)/$nodes]*${node}]:${memcached_threads}}|tr ' ' ',')
-					fi
-					
-					/nas/yvan.chen/source/sshpass-1.06/sshpass-`uname -m` -p HongJunWei@2022 ssh 127.0.0.1 -o StrictHostKeychecking=no "numactl -C ${cpus} -m ${node} /usr/local/memcached/bin/memcached -m ${memcached_memory} -t ${memcached_threads} -p ${port} -u root -c 102400 -P /tmp/${port}.pid -d"
-					'''
-				}
-		}
-		stage('跨NUMA性能测试') {
-			agent {label "${client_node}"} 
-				steps {
-					sh '''
-					memtier_benchmark -s ${server_node} -p ${port} --ratio=${ratio} --data-size=${datasize} --test-time=${testtime} -P ${protocol} -c ${clients} -t ${threads} -x ${perf_test_loop} --hide-histogram | tee -a /tmp/perf_test_8.log
-					'''
-				}
-		}
-		stage('跨SOCKET启动memcached') {
-			agent {label "${server_node}"} 
-				steps {
-					sh '''
-					if [[ $(ps aux|grep memcached|grep -v grep) ]]
-					then
-						ps aux|grep memcached|grep -v grep|awk '{print $2}' | xargs kill -9 
-					fi
-					echo 3 > /proc/sys/vm/drop_caches
-					sockets=$(lscpu | grep "Socket("|awk '{print $NF}')
-					numas=$(lscpu | grep "NUMA node("|awk '{print $NF}')
-					numas_per_socket=$((${numas}/${sockets}))
-					eth_node=$(cat /sys/class/net/${ethname}/device/numa_node)
-					eth_socket=$((${eth_node}/${numas_per_socket}))
-					if (($eth_socket % 2 == 0)); then
-						socket=$((${eth_socket}+1))
-					else
-						socket=$((${eth_socket}-1))
-					fi
-					node=$((${numas_per_socket}*${socket}))
-					nodes=`lscpu |grep "NUMA node("|awk '{print $3}'`
-					if [[ x$(uname -m) == x"aarch64" ]];then
-					  cpus=$(numactl -H |grep "node $node"|head -1|awk -F":" '{print $2}'|sed 's/^ //g'|cut -d " " -f 1-${memcached_threads}|tr ' ' ',')
-					elif [[ x$(uname -m) == x"x86_64" ]];then
-					  turbostat -n 1 > /tmp/turbo.txt
-					  arr=(`tail -n $(nproc) /tmp/turbo.txt |awk '{print $4}'`)
-					  cpus=$(echo ${arr[@]:$[$[$(nproc)/$nodes]*${node}]:${memcached_threads}}|tr ' ' ',')
-					fi
-					/nas/yvan.chen/source/sshpass-1.06/sshpass-`uname -m` -p HongJunWei@2022 ssh 127.0.0.1 -o StrictHostKeychecking=no "numactl -C ${cpus} -m ${node} /usr/local/memcached/bin/memcached -m ${memcached_memory} -t ${memcached_threads} -p ${port} -u root -c 102400 -P /tmp/${port}.pid -d"
-					'''
-				}
-		}
-		stage('跨SOCKET性能测试') {
-			agent {label "${client_node}"} 
-				steps {
-					sh '''
-					memtier_benchmark -s ${server_node} -p ${port} --ratio=${ratio} --data-size=${datasize} --test-time=${testtime} -P ${protocol} -c ${clients} -t ${threads} -x ${perf_test_loop} --hide-histogram | tee -a /tmp/perf_test_9.log
-					'''
-				}
-		}
-		stage('单NUMA重启memcached') {
-			agent {label "${server_node}"} 
-				steps {
-					sh '''
-					if [[ $(ps aux|grep memcached|grep -v grep) ]]
-					then
-						ps aux|grep memcached|grep -v grep|awk '{print $2}' | xargs kill -9 
-					fi
-					echo 3 > /proc/sys/vm/drop_caches
-					eth_node=$(cat /sys/class/net/${ethname}/device/numa_node)
-					nodes=`lscpu |grep "NUMA node("|awk '{print $3}'`
-					if [[ x$(uname -m) == x"aarch64" ]];then
-					  cpus=$(numactl -H |grep "node $eth_node"|head -1|cut -d " " -f $[4+${eth_combined}]-$[$[$[4+${eth_combined}]-1]+${memcached_threads}]|tr ' ' ',')
-					elif [[ x$(uname -m) == x"x86_64" ]];then
-					  turbostat -n 1 > /tmp/turbo.txt
-					  arr=(`tail -n $(nproc) /tmp/turbo.txt |awk '{print $4}'`)
-					  cpus=$(echo ${arr[@]:$[$[$[$(nproc)/$nodes]*${eth_node}]+${eth_combined}]:${memcached_threads}}|tr ' ' ',')
-					fi
-					/nas/yvan.chen/source/sshpass-1.06/sshpass-`uname -m` -p HongJunWei@2022 ssh 127.0.0.1 -o StrictHostKeychecking=no "numactl -C ${cpus} -m ${eth_node} /usr/local/memcached/bin/memcached -m ${memcached_memory} -t ${memcached_threads} -p ${port} -u root -c 102400 -P /tmp/${port}.pid -d"
-					'''
-				}
-		}
-		stage('优化累加性能测试') {
-			agent {label "${client_node}"} 
-				steps {
-					sh '''
-					memtier_benchmark -s ${server_node} -p ${port} --ratio=${ratio} --data-size=${datasize} --test-time=${testtime} -P ${protocol} -c ${clients} -t ${threads} -x ${perf_test_loop} --hide-histogram | tee -a /tmp/perf_test_10.log
-					'''
-				}
-		}
+			}	
+		}	
 	}
-}
