@@ -1,0 +1,324 @@
+pipeline {
+    agent {label "${agent}"}
+    parameters {
+        choice choices: ['10.1.180.16', '10.1.180.2'], name: 'agent'
+    }
+   stages {
+       stage('ENVPrepare') {
+            steps {
+                sh '''
+                yum install openssh-server hostname sudo libtirpc-devel zlib-devel lz4-devel bzip2-devel openssl-devel cyrus-sasl-devel cmake python3 python2 fuse fuse-devel -y
+                python3.6 -m pip install pymysql
+                echo 0.0.0.0 hadoop1 >> /etc/hosts 
+                cpu_vendor=$(dmidecode -t processor | grep 'Manufacturer'|uniq | awk -F ':' '{print $2}')
+                if [[ $cpu_vendor =~ "AMD" ]]; then
+                       cd ~ && wget http://10.1.180.190/bigdata/hadoop/hadoop-3.4.0-x86.tar.gz && tar -zxvf hadoop-3.4.0-x86.tar.gz
+                       if [[ $(lsof -t "/dev/nvme1n1") ]]; then
+                          lsof -t "/dev/nvme1n1" |xargs kill -9
+                       fi
+                       if [[ $(lsof -t "/dev/nvme3n1") ]]; then
+                          lsof -t "/dev/nvme3n1" |xargs kill -9
+                       fi
+                       if [[ $(lsof -t "/dev/nvme0n1") ]]; then
+                          lsof -t "/dev/nvme0n1" |xargs kill -9
+                       fi
+                       if [ -e /data1 ]; then
+                          umount /data1 ||true
+                          rm -rf /data1
+                       fi
+                       if [ -e /data2 ]; then
+                          umount /data2 ||true
+                          rm -rf /data2
+                       fi
+                       if [ -e /data3 ]; then
+                          umount /data3 ||true
+                          rm -rf /data3
+                       fi
+                       mkfs.ext4  -F /dev/nvme1n1
+                       mkfs.ext4  -F /dev/nvme3n1
+                       mkdir /data1 /data2
+                       mount /dev/nvme1n1 /data1
+                       mount /dev/nvme3n1 /data2
+                       echo "AMD2 two socket datadir is prepared!!!!"
+                    elif [[ $cpu_vendor =~ "Ampere" ]]; then
+                       cd ~ && wget http://10.1.180.190/bigdata/hadoop/hadoop-3.4.0.tar.gz && tar -zxvf hadoop-3.4.0.tar.gz
+                       if [[ $(lsof -t "/dev/nvme1n1") ]]; then
+                          lsof -t "/dev/nvme1n1" |xargs kill -9
+                       fi
+                       if [[ $(lsof -t "/dev/nvme0n1") ]]; then
+                          lsof -t "/dev/nvme0n1" |xargs kill -9
+                       fi
+                       if [[ $(lsof -t "/dev/nvme2n1") ]]; then
+                          lsof -t "/dev/nvme2n1" |xargs kill -9
+                       fi
+                       if [ -e /data1 ]; then
+                          umount /data1 ||true
+                          rm -rf /data1
+                       fi
+                       if [ -e /data2 ]; then
+                          umount /data2 ||true
+                          rm -rf /data2
+                       fi
+                       if [ -e /data3 ]; then
+                          umount /data3 ||true
+                          rm -rf /data3
+                       fi
+                       mkfs.ext4  -F /dev/nvme1n1
+                       mkfs.ext4  -F /dev/nvme0n1
+                       mkdir /data1 /data2
+                       mount /dev/nvme1n1 /data1
+                       mount /dev/nvme0n1 /data2
+                       echo "Ampere16 two socket datadir is prepared!!!!"
+                    elif [[ $cpu_vendor =~ "Intel" ]]; then
+                       cd ~ && wget http://10.1.180.190/bigdata/hadoop/hadoop-3.4.0-x86.tar.gz && tar -zxvf hadoop-3.4.0-x86.tar.gz
+                       if [[ $(lsof -t "/dev/nvme1n1") ]]; then
+                          lsof -t "/dev/nvme1n1" |xargs kill -9
+                       fi
+                       if [[ $(lsof -t "/dev/nvme0n1") ]]; then
+                          lsof -t "/dev/nvme0n1" |xargs kill -9
+                       fi
+                       if [[ $(lsof -t "/dev/nvme2n1") ]]; then
+                          lsof -t "/dev/nvme2n1" |xargs kill -9
+                       fi
+                       if [[ $(lsof -t "/dev/nvme3n1") ]]; then
+                          lsof -t "/dev/nvme3n1" |xargs kill -9
+                       fi
+                       if [ -e /data1 ]; then
+                          umount /data1 ||true
+                          rm -rf /data1
+                       fi
+                       if [ -e /data2 ]; then
+                          umount /data2 ||true
+                          rm -rf /data2
+                       fi
+                       if [ -e /data3 ]; then
+                          umount /data3 ||true
+                          rm -rf /data3
+                       fi
+                       mkfs.ext4  -F /dev/nvme1n1
+                       mkfs.ext4  -F /dev/nvme3n1
+                       mkdir /data1 /data2
+                       mount /dev/nvme1n1 /data1
+                       mount /dev/nvme3n1 /data2
+                       echo "Intel two socket datadir is prepared!!!!"                                          
+                    else
+                      echo "hj01 to fill"
+                    fi
+                     if [ ! -e ~/.ssh/id_rsa ]; then
+                        ssh-keygen -A
+                        ssh-keygen -t rsa -P '' -f ~/.ssh/id_rsa
+                        cat ~/.ssh/id_rsa.pub >> ~/.ssh/authorized_keys
+                        chmod 0600 ~/.ssh/authorized_keys
+                        echo "StrictHostKeyChecking no" >>/etc/ssh/ssh_config
+                     else
+                        echo "ssh id_rsa exits!"
+                     fi
+                     if [ ! -e /etc/alternatives/java_sdk_1.8.0 ]; then
+                        yum install -y java-1.8.0-openjdk-devel
+                     else
+                        echo "openjdk8 exits!"
+                     fi
+                '''
+            }
+        }
+        stage('DeployBenchmarking') {
+            steps {
+                sh '''
+                cd /root/hadoop-3.4.0
+                echo "
+                export HDFS_NAMENODE_USER=root
+                export HDFS_DATANODE_USER=root
+                export HDFS_SECONDARYNAMENODE_USER=root
+                export YARN_RESOURCEMANAGER_USER=root
+                export YARN_NODEMANAGER_USER=root" >> /root/.bashrc
+                source /root/.bashrc
+                echo "export JAVA_HOME=/etc/alternatives/java_sdk_1.8.0" >> /root/hadoop-3.4.0/etc/hadoop/hadoop-env.sh
+                bin/hadoop namenode -format
+                sbin/start-all.sh || true
+                cd ~ && wget http://10.1.180.190/bigdata/HiBench-7.1.1.tar.gz
+                tar xf HiBench-7.1.1.tar.gz && cd HiBench-7.1.1
+                sed -i 's/hibench.scale.profile tiny/hibench.scale.profile gigantic/g' conf/hibench.conf
+                sed -i 's/run_hadoop_job/eval run_hadoop_job/g' bin/workloads/micro/dfsioe/prepare/prepare.sh
+                sed -i 's/run_hadoop_job/eval run_hadoop_job/g' bin/workloads/micro/dfsioe/hadoop/run_read.sh
+                sed -i 's/run_hadoop_job/eval run_hadoop_job/g' bin/workloads/micro/dfsioe/hadoop/run_write.sh
+                 echo '
+hibench.hadoop.home    /root/hadoop-3.4.0
+hibench.hadoop.executable     ${hibench.hadoop.home}/bin/hadoop
+hibench.hadoop.configure.dir  ${hibench.hadoop.home}/etc/hadoop
+hibench.hdfs.master       hdfs://hadoop1:9000
+hibench.hadoop.release    apache
+' > conf/hadoop.conf
+                echo '
+micro.terasort
+micro.dfsioe
+' > conf/benchmarks.lst
+                echo '
+hadoop
+' > conf/frameworks.lst
+                '''
+            }
+        }
+        stage('RunBasic') {
+            steps {
+                sh '''
+                cd /root/HiBench-7.1.1
+                sed -i 's/hibench.default.map.parallelism 8/hibench.default.map.parallelism 128/g' conf/hibench.conf
+                sed -i 's/hibench.default.shuffle.parallelism 8/hibench.default.shuffle.parallelism 64/g' conf/hibench.conf
+                bin/run_all.sh
+                python3.6 collect.py basic $(dmidecode -t processor | grep 'Manufacturer'|uniq | awk -F ':' '{print $2}')
+                rm -f report/hibench.report
+                bash /root/hadoop-3.4.0/sbin/stop-all.sh
+                rm -rf /data1/*
+                rm -rf /data2/*
+                '''
+            }
+        }
+        stage('RunFull') {
+            steps {
+                sh '''
+                cd /root/HiBench-7.1.1
+                sed -i 's/hibench.default.map.parallelism *128/hibench.default.map.parallelism 256/g' conf/hibench.conf
+                sed -i 's/hibench.default.shuffle.parallelism *64/hibench.default.shuffle.parallelism 128/g' conf/hibench.conf
+                rm -f /root/hadoop-3.4.0/etc/hadoop/yarn-site.xml
+                ln -s /root/hadoop-3.4.0/etc/hadoop/yarn-site-full.xml /root/hadoop-3.4.0/etc/hadoop/yarn-site.xml
+                cd /root/hadoop-3.4.0
+                bin/hadoop namenode -format
+                sbin/start-all.sh || true
+                sleep 3
+                cd /root/HiBench-7.1.1
+                bin/run_all.sh
+                python3.6 collect.py full_socket $(dmidecode -t processor | grep 'Manufacturer'|uniq | awk -F ':' '{print $2}')
+                rm -f report/hibench.report
+                bash /root/hadoop-3.4.0/sbin/stop-all.sh
+                rm -rf /data1/*
+                rm -rf /data2/*
+                
+                '''
+            }
+        }
+        stage('RunSingle') {
+            steps {
+                sh '''
+                cd /root/HiBench-7.1.1
+                sed -i 's/hibench.default.map.parallelism *256/hibench.default.map.parallelism 128/g' conf/hibench.conf
+                sed -i 's/hibench.default.shuffle.parallelism *128/hibench.default.shuffle.parallelism 64/g' conf/hibench.conf
+                rm -f /root/hadoop-3.4.0/etc/hadoop/yarn-site.xml
+                ln -s /root/hadoop-3.4.0/etc/hadoop/yarn-site-socket.xml /root/hadoop-3.4.0/etc/hadoop/yarn-site.xml
+                cpu_vendor=$(dmidecode -t processor | grep 'Manufacturer'|uniq | awk -F ':' '{print $2}')
+                if [[  $cpu_vendor =~ "AMD" ]]; then
+                       if [[ $(lsof -t "/dev/nvme1n1") ]]; then
+                          lsof -t "/dev/nvme1n1" |xargs kill -9
+                       fi
+                       if [[ $(lsof -t "/dev/nvme3n1") ]]; then
+                          lsof -t "/dev/nvme3n1" |xargs kill -9
+                       fi
+                       if [[ $(lsof -t "/dev/nvme0n1") ]]; then
+                          lsof -t "/dev/nvme0n1" |xargs kill -9
+                       fi
+                       if [ -e /data1 ]; then
+                          umount /data1 ||true
+                          rm -rf /data1
+                       fi
+                       if [ -e /data2 ]; then
+                          umount /data2 ||true
+                          rm -rf /data2
+                       fi
+                       if [ -e /data3 ]; then
+                          umount /data3 ||true
+                          rm -rf /data3
+                       fi
+                       mkfs.ext4  -F /dev/nvme1n1
+                       mkfs.ext4  -F /dev/nvme0n1
+                       mkdir /data1 /data2
+                       mount /dev/nvme1n1 /data1
+                       mount /dev/nvme0n1 /data2
+                       echo "AMD2 1 socket datadir is prepared!!!!"
+                    elif [[ $cpu_vendor =~ "Ampere" ]]; then
+                       if [[ $(lsof -t "/dev/nvme1n1") ]]; then
+                          lsof -t "/dev/nvme1n1" |xargs kill -9
+                       fi
+                       if [[ $(lsof -t "/dev/nvme0n1") ]]; then
+                          lsof -t "/dev/nvme0n1" |xargs kill -9
+                       fi
+                       if [[ $(lsof -t "/dev/nvme2n1") ]]; then
+                          lsof -t "/dev/nvme2n1" |xargs kill -9
+                       fi
+                       if [[ $(lsof -t "/dev/nvme3n1") ]]; then
+                          lsof -t "/dev/nvme3n1" |xargs kill -9
+                       fi
+                       if [ -e /data1 ]; then
+                          umount /data1 ||true
+                          rm -rf /data1
+                       fi
+                       if [ -e /data2 ]; then
+                          umount /data2 ||true
+                          rm -rf /data2
+                       fi
+                       if [ -e /data3 ]; then
+                          umount /data3 ||true
+                          rm -rf /data3
+                       fi
+                       mkfs.ext4  -F /dev/nvme1n1
+                       mkfs.ext4  -F /dev/nvme0n1
+                       mkdir /data1 /data2
+                       mount /dev/nvme1n1 /data1
+                       mount /dev/nvme0n1 /data2
+                       echo "Ampere16 1 socket datadir is prepared!!!!"       
+                     elif [[ $cpu_vendor =~ "Intel" ]]; then
+                       if [[ $(lsof -t "/dev/nvme1n1") ]]; then
+                          lsof -t "/dev/nvme1n1" |xargs kill -9
+                       fi
+                       if [[ $(lsof -t "/dev/nvme0n1") ]]; then
+                          lsof -t "/dev/nvme0n1" |xargs kill -9
+                       fi
+                       if [[ $(lsof -t "/dev/nvme2n1") ]]; then
+                          lsof -t "/dev/nvme2n1" |xargs kill -9
+                       fi
+                       if [[ $(lsof -t "/dev/nvme3n1") ]]; then
+                          lsof -t "/dev/nvme3n1" |xargs kill -9
+                       fi
+                       if [ -e /data1 ]; then
+                          umount /data1 ||true
+                          rm -rf /data1
+                       fi
+                       if [ -e /data2 ]; then
+                          umount /data2 ||true
+                          rm -rf /data2
+                       fi
+                       if [ -e /data3 ]; then
+                          umount /data3 ||true
+                          rm -rf /data3
+                       fi
+                       mkfs.ext4  -F /dev/nvme1n1
+                       mkfs.ext4  -F /dev/nvme0n1
+                       mkdir /data1 /data2
+                       mount /dev/nvme1n1 /data1
+                       mount /dev/nvme0n1 /data2
+                       echo "Intel05 1 socket datadir is prepared!!!!"      
+                    else
+                      echo "hj01 to fill"
+                fi
+                    
+                export HADOOP_HOME=/root/hadoop-3.4.0
+                /root/hadoop-3.4.0/bin/hadoop namenode -format
+                /root/hadoop-3.4.0//sbin/numastart-all.sh || true
+                sleep 3
+                bin/run_all.sh
+                python3.6 collect.py single_socket $(dmidecode -t processor | grep 'Manufacturer'|uniq | awk -F ':' '{print $2}')
+                rm -f report/hibench.report
+                bash /root/hadoop-3.4.0/sbin/stop-all.sh
+                rm -rf /data1/*
+                rm -rf /data2/*
+                
+                '''
+            }
+        }
+   }
+   post {
+	    success {
+	        sh '''
+                echo done
+	           '''
+	    }
+	}
+}
