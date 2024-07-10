@@ -4,7 +4,7 @@ https://hj-micro.feishu.cn/wiki/T1b3wrMAxixRoJky1HccjVEwnyd
 ## hadoop-post-silicon
 jekins文件
 ## hadoop-post-silicon.sh
-jekins文件转的脚本，用于在不能部署jekins的平台上使用
+jekins文件转的脚本，用于在不能部署jekins的平台上使用，可能需要手动下载部署软件包以及修改挂盘
 ## hadoop-single-node.sh
 只跑单socket版
 
