@@ -46,6 +46,31 @@ pipeline {
                 '''
             }
         }
+        stage('BuildOpenBlas') {
+            steps {
+                sh '''
+                source /opt/rh/gcc-toolset-10/enable
+                git clone http:gitlab.hj-micro.com/ai/openblas.git
+                cd openblas
+                make clean
+                DYNAMIC_ARCH=1 HOSTCC=gcc  USE_THREAD=1   USE_OPENMP=1 FC=gfortran  make -j $(nproc)
+
+                make install
+                '''
+            }
+        }
+        stage('TestGEMM') {
+            steps {
+                sh '''
+                source /opt/rh/gcc-toolset-10/enable
+                git clone http:gitlab.hj-micro.com/ai/ai_model.git
+                cd ai_model/GEMM
+                g++ -O3 gemm.cpp -I/opt/OpenBLAS/include/ -L/opt/OpenBLAS/lib -Wl,-rpath,/opt/OpenBLAS/lib -lopenblas -o gemm
+                chmod 777 gemmTest.sh
+                ./gemmTest.sh
+                '''
+            }
+        }
         stage('RunPerformanceTest') {
             steps {
                 sh '''
