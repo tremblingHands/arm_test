@@ -1,0 +1,12 @@
+[global]
+filename=/dev/DEVICE
+rw=write
+ioengine=libaio
+direct=1
+iodepth=32
+thread
+numjobs=2
+bs=1m
+group_reporting
+
+[throughout-warmup]
