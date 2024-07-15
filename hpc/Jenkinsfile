@@ -1,0 +1,122 @@
+def cpu_type = 'null'
+def numa_num = 0
+def need_reboot = 0
+def need_numactl = 0
+def bios_attributes = 'null'
+pipeline {
+    agent {label "${servers}"}
+    parameters {
+        string(name: 'servers', defaultValue: '10.1.180.', description: 'server node, use division ";" for multi-nodes')
+    }
+
+    stages {
+        stage ('resetBIOS') {
+            agent {label "vmware-190"}
+            steps {
+                script{
+                   def servers = params.servers.split(' ').toList()
+                   dir("scripts") {
+                        git credentialsId: 'Gitlab', url: 'git@gitlab.hj-micro.com:appsoftware/scripts.git'
+                    }
+                    sh '''
+                    cd scripts
+                    #待扩展成多台设备的复位BIOS
+                    python3 bios/bios.py --ability reset --server_ip "${servers}" --reboot true --attributes '{}'
+                    sleep 600s
+                    for server in $(echo ${servers} | sed 's/;/ /g')
+                    do
+                        for i in {1..10}
+                        do
+                        {
+                            ping ${server} -c 3 && break
+                        } || {
+                            sleep 120s
+                        }
+                        done
+                    done
+                    # back to ${servers}
+                    python3 bios/bios.py --ability common --server_ip "${servers}" --reboot true --attributes '{}'
+                    echo "Waiting for reboot"
+                    sleep 600s
+                    for server in $(echo ${servers} | sed 's/;/ /g')
+                    do
+                        for i in {1..10}
+                        do
+                        {
+                            ping ${server} -c 3 && break
+                        } || {
+                            sleep 120s
+                        }
+                        done
+                    done
+                    '''
+                 }
+            }
+        }
+
+        stage('ENVPrepare') {
+            steps{
+                git credentialsId: 'Gitlab', url: 'git@gitlab.hj-micro.com:appsoftware/hpc/postsilicon.git'
+                script {
+                    def runPathValue = sh(script: 'bash envprepare.sh | grep HPC_RUN_PATH= | cut -d = -f 2', returnStdout: true).trim()
+                    env.HPC_RUN_PATH = runPathValue
+                }
+            }
+        }
+
+        stage('runCases') {
+            steps{
+                script {
+                    sh '''
+                        echo  $HPC_RUN_PATH
+                        if [ -f $HPC_RUN_PATH/start.sh ];then
+                            cd $HPC_RUN_PATH && bash start.sh
+                        else
+                            echo "No exec file found, Failed"
+                        fi
+                    '''
+                }
+            }
+        }
+
+        stage('collectResult') {
+            steps{
+                script {
+                    sh '''
+                        echo  $HPC_RUN_PATH
+                        if [ -d $HPC_RUN_PATH/result ];then
+                            cp -r $HPC_RUN_PATH/result/* /nas/freeman.liang/hpc/test_result/postsilicon/
+                            cat $HPC_RUN_PATH/result/*/score > ./score.txt
+                       else
+                            echo "No result found, Failed"
+                        fi
+                    '''
+                }
+            }
+        }
+
+        stage('cleanData') {
+            steps{
+                script {
+                    sh '''
+                        echo  $HPC_RUN_PATH
+                        if [ -d $HPC_RUN_PATH ];then
+                            bash clean.sh $HPC_RUN_PATH
+                        else
+                            echo "No data found,  Failed"
+                        fi
+                    '''
+                }
+            }
+        }
+
+    }
+
+    post {
+        success {
+            publishHTML([allowMissing: true, alwaysLinkToLastBuild: true, keepAll: true, reportDir: './', reportFiles: 'score.txt', reportName: 'TestReport', reportTitles: 'Results', useWrapperFileDirectly: true])
+        }
+    }
+
+}
+
