@@ -7,15 +7,28 @@ pipeline {
     agent {label "${servers}"}
     parameters {
         string(name: 'servers', defaultValue: '10.1.180.', description: 'server node, use division ";" for multi-nodes')
+        booleanParam(name: 'RESET_BOIS', defaultValue: false, description: 'Reset Bois? It would take a long time')
+        booleanParam(name: 'CASE_SINGLE_INST', defaultValue: true, description: 'Run single instance test case')
+        booleanParam(name: 'CASE_SINGLE_SOCKET', defaultValue: true, description: 'Run multi-instance on single socket')
+        booleanParam(name: 'CASE_LINER_TEST', defaultValue: false, description: 'Run liner test on single socket')
+        booleanParam(name: 'CASE_SINGLE_INST_CROSS_SOCKET', defaultValue: false, description: 'Run single instance test case cross socket')
+        booleanParam(name: 'CASE_ALL_SOCKET', defaultValue: false, description: 'Run multi-instance on all sockets')
+        booleanParam(name: 'RUN_MODE_FAST', defaultValue: false, description: 'Run fastly, not exec case reality, just debug for jenkins pipeline')
+        booleanParam(name: 'RUN_MODE_PERF', defaultValue: false, description: 'Enable micro data collection')
     }
 
     stages {
         stage ('resetBIOS') {
             agent {label "vmware-190"}
+            when {
+                expression { return params.RESET_BOIS}
+            }
             steps {
+
+
                 script{
-                   def servers = params.servers.split(' ').toList()
-                   dir("scripts") {
+                    def servers = params.servers.split(' ').toList()
+                    dir("scripts") {
                         git credentialsId: 'Gitlab', url: 'git@gitlab.hj-micro.com:appsoftware/scripts.git'
                     }
                     sh '''
@@ -58,6 +71,12 @@ pipeline {
             steps{
                 git credentialsId: 'Gitlab', url: 'git@gitlab.hj-micro.com:appsoftware/hpc/postsilicon.git'
                 script {
+                    dir("scripts") {
+                        git credentialsId: 'Gitlab', url: 'git@gitlab.hj-micro.com:appsoftware/scripts.git'
+                    }
+                    sh '''
+                    rm -rf scripts/topdown/*.csv
+                    '''
                     def runPathValue = sh(script: 'bash envprepare.sh | grep HPC_RUN_PATH= | cut -d = -f 2', returnStdout: true).trim()
                     env.HPC_RUN_PATH = runPathValue
                 }
@@ -67,14 +86,47 @@ pipeline {
         stage('runCases') {
             steps{
                 script {
+
+                    def run_param = ""
+                    if (params.CASE_SINGLE_INST) {
+                        run_param = "single_ins,${run_param}"
+                    }
+
+                    if (params.CASE_SINGLE_SOCKET) {
+                        run_param = "single_socket,${run_param}"
+                    }
+
+                    if (params.CASE_LINER_TEST) {
+                        run_param = "single_socket_liner,${run_param}"
+                    }
+
+                    if (params.CASE_SINGLE_INST_CROSS_SOCKET) {
+                        run_param = "single_ins_cross_socket,${run_param}"
+                    }
+
+                    if (params.CASE_ALL_SOCKET) {
+                        run_param = "all_sockets,${run_param}"
+                    }
+
+                    if (params.RUN_MODE_FAST) {
+                        run_param = "fast,${run_param}"
+                    }
+
+                    if (params.RUN_MODE_PERF) {
+                        run_param = "perf_micro,${run_param}"
+                    }
+                    echo "${run_param}"
+                    withEnv(["RUN_PARAM=${run_param}"]) {
                     sh '''
                         echo  $HPC_RUN_PATH
                         if [ -f $HPC_RUN_PATH/start.sh ];then
-                            cd $HPC_RUN_PATH && bash start.sh
+                            echo "$RUN_PARAM"
+                            cd $HPC_RUN_PATH && bash start.sh ${RUN_PARAM}
                         else
                             echo "No exec file found, Failed"
                         fi
                     '''
+                    }
                 }
             }
         }
@@ -85,6 +137,10 @@ pipeline {
                     sh '''
                         echo  $HPC_RUN_PATH
                         if [ -d $HPC_RUN_PATH/result ];then
+                            pwd
+                            if ls scripts/topdown/*.csv 1> /dev/null 2>&1; then
+                                cp -rf scripts/topdown/*.csv $HPC_RUN_PATH/result/*/
+                            fi
                             cp -r $HPC_RUN_PATH/result/* /nas/freeman.liang/hpc/test_result/postsilicon/
                             cat $HPC_RUN_PATH/result/*/score > ./score.txt
                        else
