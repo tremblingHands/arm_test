@@ -204,7 +204,6 @@ pipeline {
         success {
             node(server) {
                 // 从标准输出log获取各测试用例性能，归档至数据库;
-                // 默认用户根目录下已存在MySQL客户端程序mysql和Jenkins客户端程序jenkins-cli.jar;
                 sh '''
                     # 业务常量和复用变量定义
                     DB_HOST="10.1.180.190"
@@ -223,6 +222,7 @@ pipeline {
                     wget -q http://10.1.180.188:8080/jnlpJars/jenkins-cli.jar
                     java -jar jenkins-cli.jar -s http://10.1.180.188:8080/ console ${JOB_NAME} > redis.log
                     wget http://10.1.180.190/database/mysql/mysql
+                    chmod +x mysql
 
                     # UT结果入库
                     if grep -q 'All tests passed without errors!' redis.log; then
