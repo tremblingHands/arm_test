@@ -222,6 +222,7 @@ pipeline {
                     export PATH=$JAVA_HOME/bin:$PATH
                     wget -q http://10.1.180.188:8080/jnlpJars/jenkins-cli.jar
                     java -jar jenkins-cli.jar -s http://10.1.180.188:8080/ console ${JOB_NAME} > redis.log
+                    wget http://10.1.180.190/database/mysql/mysql
 
                     # UT结果入库
                     if grep -q 'All tests passed without errors!' redis.log; then
