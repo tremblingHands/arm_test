@@ -1,6 +1,6 @@
 pipeline {
     parameters {
-        string defaultValue:'10.1.180.16', name:'agent'
+        string defaultValue:'10.1.180.16', name:'server'
     }
     agent {label server}
    stages {
