@@ -238,18 +238,11 @@
 						export PATH=$JAVA_HOME/bin:$PATH
 						wget -q http://10.1.180.188:8080/jnlpJars/jenkins-cli.jar
 						java -jar jenkins-cli.jar -s http://10.1.180.188:8080/ console ${JOB_NAME} > memcached.log
-
-						# 功能用例结果入库，无报错情况下，说明用例执行成功
-						for test_case_id in {1..15}
-						do
-							SQL_INSERT="INSERT INTO naqu (test_case_id, OPS_OR_UT, AVG_Latency, log_url) VALUES (${test_case_id}, 1, 0, ${LOG_URL})"
-							mysql -h$DB_HOST -u$DB_USER -p$DB_PASS $DB_NAME -e \"${SQL_INSERT}\"
-						done
 						
 						
 						# 性能数据入库
-						test_case_id=16
-						for i in {1..10}
+						test_case_id=22
+						for i in {7..10}
 						do
 							OPS=$(grep -A 8 AVERA /tmp/perf_test_${i}.log|grep Totals|awk '{print $2}')
 							LAT=$(grep -A 8 AVERA /tmp/perf_test_${i}.log|grep Totals|awk '{print $5}')
