@@ -1,44 +1,26 @@
 #!/bin/bash
 
-rounds=5
-cpu=6
-multicpu=0-31
-
-if [ ! -z "$1" ]; then
-    cpu=$1
-fi
-
-if [ ! -z "$2" ]; then
-    multicpu=$2
-fi
-
-architecture=$(uname -m)
-
-if [ "$architecture" == "x86_64" ]; then
-    echo "The architecture is x86_64"
-elif [ "$architecture" == "aarch64" ]; then
-    echo "The architecture is aarch64"
+os_version=$(cat /etc/redhat-release)
+if [[ "$os_version" == *"release 7.9"* ]]; then
+    echo "The OS Platform is $os_version"
+elif [[ "$os_version" == *"release 8"* ]]; then
+    echo "The OS Platform is $os_version"
 else
-    echo "Unknown architecture: $architecture"
+    echo "Unknown OS Platform"
     exit 1
 fi
 
-result_dir="results"
+architecture=$(uname -m)
+echo "The Architecture is $architecture"
 
-if [ ! -d "$result_dir" ]; then
-    mkdir -p "$result_dir"
-fi
-
-current_time=$(date +"%Y%m%d_%H%M%S")
-result_file="$result_dir/virt_mem$current_time.txt"
-
-result_dir="$result_dir/virt_mem$current_time"
-if [ ! -d "$result_dir" ]; then
-    mkdir -p "$result_dir"
-fi
 
 prepare_env() {
     yum install -y libtirpc libtirpc-devel
+    if [[ "$os_version" == *"release 7.9"* ]]; then
+        source /opt/rh/devtoolset-10/enable
+    else
+        source /opt/rh/gcc-toolset-10/enable
+    fi
 }
 
 run_lmbench() {
@@ -65,6 +47,10 @@ run_lmbench() {
         current_time=$(date +"%Y%m%d_%H%M%S")
         output_file="$result_dir/lmbench_$current_time.txt"
         eval $command > "$output_file" 2>&1
+        if [ $? -ne 0 ]; then
+            echo "Error: Something wrong when running lmbench3, see output $output_file"
+            exit 1
+        fi
         val=$(grep -v '^$' "$output_file" | tail -n 1 | awk '{print $2}')
         total=$(echo "$total + $val" | bc)
         echo "$val" >> "$result_file"
@@ -98,6 +84,10 @@ stream() {
         current_time=$(date +"%Y%m%d_%H%M%S")
         output_file="$result_dir/stream_$current_time.txt"
         eval $command > "$output_file" 2>&1
+        if [ $? -ne 0 ]; then
+            echo "Error: Something wrong when running stream, see output $output_file"
+            exit 1
+        fi
         val=$(grep -A 4 '^Function' "$output_file")
         val_copy=$(echo "$val" | awk 'NR==2 {print $2}')
         val_scale=$(echo "$val" | awk 'NR==3 {print $2}')
@@ -127,7 +117,124 @@ run_stream() {
     stream "$multicpu"
 }
 
+show_help() {
+    echo "Usage: $0 [options]"
+    echo ""
+    echo "Options:"
+    echo "  -c, --cpu <cpu>            Specify the CPU core for single-core memory testing (default: 12)"
+    echo "  -mc, --multicpu <range>    Specify the CPU core list for multi-core memory testing (default: 0-31)"
+    echo "  --host                     Indicates that the test is running on a host environment"
+    echo "                             Auto configure test CPU cores"
+    echo "                             x86_64: single-core=12, multi-core=[0-15,128-143]"
+    echo "                             aarch64: single-core=16, multi-core=[0-31]"
+    echo "  --virt                     Indicates that the test is running on a virtual machine"
+    echo "                             Auto configure test CPU cores"
+    echo "                             Sets single-core=8 and multi-core=[0-31]"
+    echo "  -r, --round <rounds>       Specify the number of memory test rounds (default: 5)"
+    echo "  -o, --output <result_dir>  Specify the data results path (default: results)"
+    echo "  -h, --help                 Show this help message and exit"
+    exit 0
+}
+
+# 解析命令行参数
+while [[ "$#" -gt 0 ]]; do
+    case $1 in
+        -c|--cpu)
+            cpu="$2"
+            shift 2
+            ;;
+        -mc|--multicpu)
+            multicpu="$2"
+            shift 2
+            ;;
+        --host)
+            if [[ -z "$cpu" ]]; then
+                if [[ "$architecture" == "x86_64" ]]; then
+                    cpu=12
+                elif [[ "$architecture" == "aarch64" ]]; then
+                    cpu=16
+                else
+                    echo "Unsupported architecture: $architecture"
+                    exit 1
+                fi
+            fi
+
+            if [[ -z "$multicpu" ]]; then
+                if [[ "$architecture" == "x86_64" ]]; then
+                    multicpu="0-15,128-143"
+                elif [[ "$architecture" == "aarch64" ]]; then
+                    multicpu="0-31"
+                else
+                    echo "Unsupported architecture: $architecture"
+                    exit 1
+                fi
+            fi
+            shift
+            ;;
+        --virt)
+            if [[ -z "$cpu" ]]; then
+                cpu=8
+            fi
+
+            if [[ -z "$multicpu" ]]; then
+                multicpu="0-31"
+            fi
+            shift
+            ;;
+        -o|--output)
+            result_dir="$2"
+            shift 2
+            ;;
+        -r|--round)
+            rounds="$2"
+            shift 2
+            ;;
+        -h|--help)
+            show_help
+            ;;
+        *)
+            echo "Unknown parameter passed: $1"
+            echo "Use -h or --help to see usage information."
+            exit 1
+            ;;
+    esac
+done
+
+
+if [[ -z "$rounds" ]]; then
+    rounds=5
+fi
+
+if [[ -z "$cpu" ]]; then
+    cpu=8
+fi
+
+if [[ -z "$multicpu" ]]; then
+    multicpu="0-31"
+fi
+
+echo "CPU: $cpu"
+echo "Multicpu: $multicpu"
+echo "Rounds: $rounds"
+
+if [[ -z "$result_dir" ]]; then
+    result_dir="results"
+fi
+
+if [ ! -d "$result_dir" ]; then
+    mkdir -p "$result_dir"
+fi
+
+current_time=$(date +"%Y%m%d_%H%M%S")
+result_file="$result_dir/virt_mem$current_time.txt"
+
+result_dir="$result_dir/virt_mem$current_time"
+if [ ! -d "$result_dir" ]; then
+    mkdir -p "$result_dir"
+fi
+
 prepare_env
 run_lmbench
 run_stream
 
+echo "results directory: $result_dir"
