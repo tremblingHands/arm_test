@@ -13,6 +13,8 @@ fi
 architecture=$(uname -m)
 echo "The Architecture is $architecture"
 
+vendor=$(lscpu | grep "BIOS Vendor ID" | awk '{ print $4}')
+echo "CPU Vendor is $vendor"
 
 prepare_env() {
     yum install -y libtirpc libtirpc-devel
@@ -117,16 +119,59 @@ run_stream() {
     stream "$multicpu"
 }
 
+set_multicore() {
+    node_arr=()
+    IFS=',' read -r -a ranges <<< "`cat /sys/devices/system/node/node0/cpulist`"
+    for range in "${ranges[@]}"; do
+        if [[ "$range" == *-* ]]; then
+            # 如果是范围，如 "1-4"
+            start=${range%-*}  # 获取范围起点
+            end=${range#*-}    # 获取范围终点
+            for ((i=start; i<=end; i++)); do
+                node_arr+=("$i")
+            done
+        else
+            # 如果是单个值，如 "8"
+            node_arr+=("$range")
+        fi
+    done
+
+    #echo "cpu list on numa node0"
+    #for i in "${!node_arr[@]}"; do
+    #    echo "node_arr[$i] = ${node_arr[$i]}"
+    #done
+
+    cpu_arr=()
+    count=32
+    for i in "${node_arr[@]}"; do
+        cpu_arr+=(`cat /sys/devices/system/cpu/cpu$i/topology/core_cpus_list`)
+        count=$count-1
+        if [ "$architecture" == "x86_64" ]; then
+            count=$count-1
+        fi
+        if [[ "$count" -le 0 ]]; then
+            break
+        fi
+    done
+
+    #echo "cpu pair on numa node0"
+    #for i in "${!cpu_arr[@]}"; do
+    #    echo "cpu_arr[$i] = ${cpu_arr[$i]}"
+    #done
+
+    multicpu=$(printf "%s," "${cpu_arr[@]}")
+    multicpu=${multicpu%,}
+    #echo $multicpu
+}
+
 show_help() {
     echo "Usage: $0 [options]"
     echo ""
     echo "Options:"
-    echo "  -c, --cpu <cpu>            Specify the CPU core for single-core memory testing (default: 12)"
+    echo "  -c, --cpu <cpu>            Specify the CPU core for single-core memory testing (default: 8)"
     echo "  -mc, --multicpu <range>    Specify the CPU core list for multi-core memory testing (default: 0-31)"
     echo "  --host                     Indicates that the test is running on a host environment"
     echo "                             Auto configure test CPU cores"
-    echo "                             x86_64: single-core=12, multi-core=[0-15,128-143]"
-    echo "                             aarch64: single-core=16, multi-core=[0-31]"
     echo "  --virt                     Indicates that the test is running on a virtual machine"
     echo "                             Auto configure test CPU cores"
     echo "                             Sets single-core=8 and multi-core=[0-31]"
@@ -150,7 +195,11 @@ while [[ "$#" -gt 0 ]]; do
         --host)
             if [[ -z "$cpu" ]]; then
                 if [[ "$architecture" == "x86_64" ]]; then
-                    cpu=12
+                    if [[ "$vendor" == "AMD" ]]; then
+                        cpu=12
+                    else
+                        cpu=16
+                    fi
                 elif [[ "$architecture" == "aarch64" ]]; then
                     cpu=16
                 else
@@ -161,7 +210,7 @@ while [[ "$#" -gt 0 ]]; do
 
             if [[ -z "$multicpu" ]]; then
                 if [[ "$architecture" == "x86_64" ]]; then
-                    multicpu="0-15,128-143"
+                    set_multicore
                 elif [[ "$architecture" == "aarch64" ]]; then
                     multicpu="0-31"
                 else
@@ -213,8 +262,8 @@ if [[ -z "$multicpu" ]]; then
     multicpu="0-31"
 fi
 
-echo "CPU: $cpu"
-echo "Multicpu: $multicpu"
+echo "single-core: $cpu"
+echo "multi-core: $multicpu"
 echo "Rounds: $rounds"
 
 if [[ -z "$result_dir" ]]; then
@@ -233,8 +282,10 @@ if [ ! -d "$result_dir" ]; then
     mkdir -p "$result_dir"
 fi
 
+echo "results directory: $result_dir"
+
 prepare_env
 run_lmbench
 run_stream
 
-echo "results directory: $result_dir"
+echo "results file: $result_file"
