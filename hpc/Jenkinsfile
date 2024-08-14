@@ -69,6 +69,7 @@ pipeline {
 
         stage('ENVPrepare') {
             steps{
+                deleteDir()
                 git credentialsId: 'Gitlab', url: 'git@gitlab.hj-micro.com:appsoftware/hpc/postsilicon.git'
                 script {
                     dir("scripts") {
@@ -141,9 +142,9 @@ pipeline {
                             if ls scripts/topdown/*.csv 1> /dev/null 2>&1; then
                                 cp -rf scripts/topdown/*.csv $HPC_RUN_PATH/result/*/
                             fi
-                            cp -r $HPC_RUN_PATH/result/* /nas/freeman.liang/hpc/test_result/postsilicon/
-                            cat $HPC_RUN_PATH/result/*/score > ./score.txt
-                       else
+                            cp -rf $HPC_RUN_PATH/result/* /nas/freeman.liang/hpc/test_result/postsilicon/
+                            cp -rf $HPC_RUN_PATH/result/* public_folder
+                        else
                             echo "No result found, Failed"
                         fi
                     '''
@@ -170,7 +171,8 @@ pipeline {
 
     post {
         success {
-            publishHTML([allowMissing: true, alwaysLinkToLastBuild: true, keepAll: true, reportDir: './', reportFiles: 'score.txt', reportName: 'TestReport', reportTitles: 'Results', useWrapperFileDirectly: true])
+            publishHTML([allowMissing: true, alwaysLinkToLastBuild: true, keepAll: true, reportDir: './public_folder',
+                         reportFiles: 'score.txt', reportName: 'TestReport', reportTitles: 'Results', useWrapperFileDirectly: true])
         }
     }
 
