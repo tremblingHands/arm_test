@@ -1,7 +1,7 @@
 pipeline {
-    agent { label "${agent}" }
+    agent {label "${agent}"}
     parameters {
-        choice(choices: ['10.1.180.16'], name: 'agent')
+        string defaultValue: '10.1.180.11', name: 'agent'
     }
     options { timeout(time: 180, unit: 'MINUTES') }
     stages {
@@ -11,7 +11,7 @@ pipeline {
                     dir("scripts") {
                         git credentialsId: 'Gitlab', url: 'git@gitlab.hj-micro.com:appsoftware/scripts.git'
                     }
-                    sh "yum install -y gcc-toolset-10 python38 perl cmake unzip bzip2 patch expect numactl ipmitool OpenIPMI php-cli php-xml php-json"
+                    sh "yum install -y gcc-toolset-10 perf perl cmake unzip bzip2 patch expect numactl ipmitool OpenIPMI"
                 }
             }
         }
@@ -79,30 +79,39 @@ pipeline {
             steps {
                 script {
                     sh '''
+                    cd "${WORKSPACE}"
                     datetime_dir=$(date +%Y%m%d%H%M%S)
-                    mkdir ${datetime_dir}/tmp && cd ${datetime_dir}
+                    mkdir -p ${datetime_dir}/tmp && cd ${datetime_dir}
 
                     echo 3 > "/proc/sys/vm/drop_caches"
                     echo always > "/sys/kernel/mm/transparent_hugepage/enabled"
                         
                     export PATH="${WORKSPACE}/ffmpeg_/bin:$PATH"
                     export LD_LIBRARY_PATH="${WORKSPACE}/ffmpeg_/lib/:$LD_LIBRARY_PATH"
+                    
+                    export VBENCH_ROOT="${WORKSPACE}/vbench/"
+                    python3 ${WORKSPACE}/vbench/code/post-silicon-test.py --output_dir=${WORKSPACE}/${datetime_dir}/tmp --encoder=libx265 --socket_id='0' --ffmpeg_dir=${WORKSPACE}/ffmpeg_/bin/ --mode=total > total.log 2>&1
+                    python3 ${WORKSPACE}/vbench/code/post-silicon-test.py --output_dir=${WORKSPACE}/${datetime_dir}/tmp --encoder=libx265 --socket_id='0' --ffmpeg_dir=${WORKSPACE}/ffmpeg_/bin/ --mode=scaling > scaling.log 2>&1
                         
+                    python3 ${WORKSPACE}/vbench/code/post-silicon-test.py --output_dir=${WORKSPACE}/${datetime_dir}/tmp --encoder=libx265 --socket_id='0' --ffmpeg_dir=${WORKSPACE}/ffmpeg_/bin/ --mode=power > power0.log 2>&1
+                    python3 ${WORKSPACE}/vbench/code/post-silicon-test.py --output_dir=${WORKSPACE}/${datetime_dir}/tmp --encoder=libx265 --socket_id='1' --ffmpeg_dir=${WORKSPACE}/ffmpeg_/bin/ --mode=power > power1.log 2>&1
+                    python3 ${WORKSPACE}/vbench/code/post-silicon-test.py --output_dir=${WORKSPACE}/${datetime_dir}/tmp --encoder=libx265 --socket_id='0,1' --ffmpeg_dir=${WORKSPACE}/ffmpeg_/bin/ --mode=power > power0_1.log 2>&1
+
                     cd "${WORKSPACE}"/scripts/topdown
-                    python3.8 perf_metrics.py -C 1 --command 'numactl --physcpubind 1 --membind 0 ffmpeg -hwaccel auto -y -hide_banner -i "${WORKSPACE}"/vbench/videos/crf0/new_chicken_3840x2160_30.mkv -c:v libx265 -x265-params \"frame-threads=1:no-wpp=1\" -preset medium -vtag hvc1 -loglevel info -f mp4 ${WORKSPACE}/${datetime_dir}/tmp/chicken_3840x2160_30.mp4' > perf_metrics.log 2>&1
+                    python3 perf_metrics.py -C 1 --command 'numactl --physcpubind 1 --membind 0 ffmpeg -hwaccel auto -y -hide_banner -i "${WORKSPACE}"/vbench/videos/crf0/new_chicken_3840x2160_30.mkv -c:v libx265 -x265-params \"frame-threads=1:no-wpp=1\" -preset medium -vtag hvc1 -loglevel info -f mp4 "${WORKSPACE}"/"${datetime_dir}"/tmp/chicken_3840x2160_30.mp4' > perf_metrics.log 2>&1
                     mv *.log *.csv  "${WORKSPACE}/${datetime_dir}/"
                     cd -
-                        
-                    export VBENCH_ROOT="${WORKSPACE}/vbench/"
-                    python3.8 ${WORKSPACE}/vbench/code/post-silicon-test.py --output_dir=${WORKSPACE}/${datetime_dir}/tmp --encoder=libx265 --socket_id='0' --ffmpeg_dir=${WORKSPACE}/ffmpeg_/bin/ --mode=total > total.log 2>&1
-                    python3.8 ${WORKSPACE}/vbench/code/post-silicon-test.py --output_dir=${WORKSPACE}/${datetime_dir}/tmp --encoder=libx265 --socket_id='0' --ffmpeg_dir=${WORKSPACE}/ffmpeg_/bin/ --mode=scaling > scaling.log 2>&1
-                        
-                    python3.8 ${WORKSPACE}/vbench/code/post-silicon-test.py --output_dir=${WORKSPACE}/${datetime_dir}/tmp --encoder=libx265 --socket_id='0' --ffmpeg_dir=${WORKSPACE}/ffmpeg_/bin/ --mode=power > power0.log 2>&1
-                    python3.8 ${WORKSPACE}/vbench/code/post-silicon-test.py --output_dir=${WORKSPACE}/${datetime_dir}/tmp --encoder=libx265 --socket_id='1' --ffmpeg_dir=${WORKSPACE}/ffmpeg_/bin/ --mode=power > power1.log 2>&1
-                    python3.8 ${WORKSPACE}/vbench/code/post-silicon-test.py --output_dir=${WORKSPACE}/${datetime_dir}/tmp --encoder=libx265 --socket_id='0,1' --ffmpeg_dir=${WORKSPACE}/ffmpeg_/bin/ --mode=power > power0_1.log 2>&1
+                    
+                    cd "${WORKSPACE}"/scripts/os
+                    python3 os_parameter.py 
+                    mv os_parameter.json "${WORKSPACE}/${datetime_dir}/"
+                    cd -
+                    
+                    current_ip=$(hostname -I|awk -F " " '{print $1}')
+                    mkdir -p /nas/wiki.deng/postsillicon/results/${datetime_dir}/$current_ip
+                    cp -rf ${WORKSPACE}/${datetime_dir}/*  /nas/wiki.deng/postsillicon/results/${datetime_dir}/$current_ip/
                     
                     rm -rf ${WORKSPACE}/${datetime_dir}/tmp
-                    
                     echo "run benchmark end!!!"
                         
                     '''
