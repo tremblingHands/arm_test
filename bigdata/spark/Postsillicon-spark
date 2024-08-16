@@ -9,10 +9,6 @@ def mount_onesocket_disk(){
          if [[ \$(lsof -t "/dev/nvme0n1") ]]; then
             lsof -t "/dev/nvme0n1" |xargs kill -9
          fi
-         if [[ \$(lsof -t "/dev/nvme3n1") ]]; then
-            lsof -t "/dev/nvme3n1" |xargs kill -9
-         fi
-         sleep 30
          if [ -e /data1 ]; then
             umount /data1 ||true
             rm -rf /data1
@@ -21,10 +17,6 @@ def mount_onesocket_disk(){
             umount /data2 ||true
             rm -rf /data2
          fi
-         if [ -e /data3 ]; then
-            umount /data3 ||true
-            rm -rf /data3
-         fi 
         mkfs.ext4  -F /dev/nvme0n1
         mkfs.ext4  -F /dev/nvme1n1
         mkdir /data1 /data2
@@ -64,7 +56,25 @@ def mount_onesocket_disk(){
          mount /dev/nvme1n1 /data2
          mount /dev/nvme2n1 /data3
       else
-         echo "hj01 to fill"
+         if [[ \$(lsof -t "/dev/nvme1n1") ]]; then
+            lsof -t "/dev/nvme1n1" |xargs kill -9
+         fi
+         if [[ \$(lsof -t "/dev/nvme0n1") ]]; then
+            lsof -t "/dev/nvme0n1" |xargs kill -9
+         fi
+         if [ -e /data1 ]; then
+            umount /data1 ||true
+            rm -rf /data1
+         fi
+         if [ -e /data2 ]; then
+            umount /data2 ||true
+            rm -rf /data2
+         fi
+         mkfs.ext4  -F /dev/nvme0n1
+         mkfs.ext4  -F /dev/nvme1n1
+         mkdir /data1 /data2
+         mount /dev/nvme0n1 /data1
+         mount /dev/nvme1n1 /data2
       fi
   """
 }
@@ -79,9 +89,6 @@ def mount_twosocket_disk(){
          if [[ \$(lsof -t "/dev/nvme3n1") ]]; then
             lsof -t "/dev/nvme4n1" |xargs kill -9
          fi
-         if [[ \$(lsof -t "/dev/nvme0n1") ]]; then
-            lsof -t "/dev/nvme0n1" |xargs kill -9
-         fi
          if [ -e /data1 ]; then
             lsof +D /data1|grep -v PID |awk '{print \$2}'|xargs kill -9 ||true
             umount /data1 ||true
@@ -92,16 +99,11 @@ def mount_twosocket_disk(){
             umount /data2 ||true
             rm -rf /data2
          fi
-         if [ -e /data3 ]; then
-            lsof +D /data3|grep -v PID |awk '{print \$2}'|xargs kill -9 ||true
-            umount /data3 ||true
-            rm -rf /data3
-         fi
          mkfs.ext4  -F /dev/nvme1n1
-         mkfs.ext4  -F /dev/nvme4n1
+         mkfs.ext4  -F /dev/nvme3n1
          mkdir /data1 /data2
          mount /dev/nvme1n1 /data1
-         mount /dev/nvme4n1 /data2
+         mount /dev/nvme3n1 /data2
          echo "AMD2 two socket datadir is prepared!!!!"
       elif [[ \$cpu_vendor =~ "Ampere" ]]; then
          if [[ \$(lsof -t "/dev/nvme1n1") ]]; then
@@ -114,9 +116,8 @@ def mount_twosocket_disk(){
             lsof -t "/dev/nvme2n1" |xargs kill -9
          fi
          if [[ \$(lsof -t "/dev/nvme3n1") ]]; then
-            lsof -t "/dev/nvme2n1" |xargs kill -9
+            lsof -t "/dev/nvme3n1" |xargs kill -9
          fi
-         sleep 30s
          if [ -e /data1 ]; then
             lsof +D /data1|grep -v PID |awk '{print \$2}'|xargs kill -9 ||true
             umount /data1 ||true
@@ -133,13 +134,34 @@ def mount_twosocket_disk(){
             rm -rf /data3
          fi
          mkfs.ext4  -F /dev/nvme0n1
-         mkfs.ext4  -F /dev/nvme3n1
+         mkfs.ext4  -F /dev/nvme2n1
          mkdir /data1 /data2
          mount /dev/nvme0n1 /data1
-         mount /dev/nvme3n1 /data2
+         mount /dev/nvme2n1 /data2
          echo "Ampere16 two socket datadir is prepared!!!!"                     
       else
         echo "hj01 to fill"
+        if [[ \$(lsof -t "/dev/nvme0n1") ]]; then
+            lsof -t "/dev/nvme0n1" |xargs kill -9
+        fi
+        if [[ \$(lsof -t "/dev/nvme2n1") ]]; then
+            lsof -t "/dev/nvme2n1" |xargs kill -9
+        fi
+        if [ -e /data1 ]; then
+            lsof +D /data1|grep -v PID |awk '{print \$2}'|xargs kill -9 ||true
+            umount /data1 ||true
+            rm -rf /data1
+        fi
+        if [ -e /data2 ]; then
+            lsof +D /data2|grep -v PID |awk '{print \$2}'|xargs kill -9 ||true
+            umount /data2 ||true
+            rm -rf /data2
+        fi
+         mkfs.ext4  -F /dev/nvme0n1
+         mkfs.ext4  -F /dev/nvme2n1
+         mkdir /data1 /data2
+         mount /dev/nvme0n1 /data1
+         mount /dev/nvme2n1 /data2
       fi
   """
 }
@@ -174,7 +196,7 @@ def prepareTestEnv(socketNum, isNumaCtl, isFullUsed){
       if [[ ${isNumaCtl} = true ]]; then
          sbin/numactl-start.sh
       else
-         sbin/start-all.sh
+         sbin/numactl-start.sh
       fi
       /opt/modules/hadoop-3.4.0/bin/hadoop fs -mkdir /home
       /opt/modules/hadoop-3.4.0/bin/hadoop fs -mkdir /home/sparkhistory
@@ -225,7 +247,7 @@ def runTests(socketNum,taskNum,data,taskNames){
             /opt/modules/hadoop-3.4.0/bin/hadoop fs -get /tt-tpch_parquet_report1 . ||true
           fi
           echo "****run ${socketNum} socket tpch finsh"
-          /opt/modules/hadoop-3.4.0/bin/hadoop fs -rm -r /home/tpch-gen-*
+          /opt/modules/hadoop-3.4.0/bin/hadoop fs -rm -r /home/tpch* || true
       fi
       if [[ "${taskNames}" =~ "tpcds" ]]; then
           if ((${data} > 1)); then
@@ -257,7 +279,7 @@ def runTests(socketNum,taskNum,data,taskNames){
             /opt/modules/hadoop-3.4.0/bin/hadoop fs -get /tt-tpcds_parquet_report2 . ||true
           fi
           echo "****run ${socketNum} socket tpcds finsh"
-        //   /opt/modules/hadoop-3.4.0/bin/hadoop fs -rm -r /home/tpcds-gen-*
+          /opt/modules/hadoop-3.4.0/bin/hadoop fs -rm -r /home/tpcds* || true
       fi
       if [[ "${taskNames}" =~ "terasort" ]]; then
           echo "start terasort"
@@ -275,8 +297,8 @@ def runTests(socketNum,taskNum,data,taskNames){
             terasort_duration=\$(((end_time - start_time) / 1000000000))
             echo \$terasort_duration >>/opt/modules/results/${socketNum}socket-${taskNum}task-${data}t/tt-terasort_parquet_report.txt
           fi
-          /opt/modules/hadoop-3.4.0/bin/hadoop fs -rm -r /terasort_in
-          /opt/modules/hadoop-3.4.0/bin/hadoop fs -rm -r /terasort_out
+          /opt/modules/hadoop-3.4.0/bin/hadoop fs -rm -r /terasort_in || true
+          /opt/modules/hadoop-3.4.0/bin/hadoop fs -rm -r /terasort_out || true
           echo "****run ${socketNum} socket terasort finsh"
       fi
     """
@@ -287,55 +309,64 @@ pipeline {
    agent {
         label "vmware-190"
    }
+   parameters {
+        choice(name: 'deploy_nodes', choices: ['10.1.180.16', '10.1.180.2', '10.1.180.5','10.1.180.11','10.1.180.14','10.1.180.13'], description: 'deploy_nodes')
+        booleanParam(name: 'setbios', defaultValue: false, description: 'Reset Bois? It would take a long time')
+        choice(name: 'mode', choices: ['single', 'machine', 'cluster','all'], description: 'mode')
+        choice(name: 'workload', choices: ['tpcds', 'tpch', 'terasort','all'], description: 'workload')
+    }
    stages {
       stage('ResetBIOS') {
          steps{
           script{
-             def deploy_nodes = params.deploy_nodes.split(' ')
-             for (server in deploy_nodes) {
-              stage(server){
-                  node(server) {
-                      echo "running on ${server}"
+             if(params.setbios){
+                 def deploy_nodes = params.deploy_nodes.split(' ')
+                 for (server in deploy_nodes) {
+                  stage(server){
+                      node(server) {
+                          echo "running on ${server}"
+                      }
                   }
-              }
-              stage(server){
-                 agent {label "vmware-190"}
-                 dir("scripts") {
-                            git credentialsId: 'Gitlab', url: 'git@172.16.1.249:appsoftware/scripts.git'
-                        }
-                 sh """
-                    cd scripts
-                    python3 bios/bios.py --ability reset --server_ip ${server} --reboot true
-                    echo "Waiting for reboot"
-                    sleep 240s
-                    for i in {1..20}
-                    do
-                        {
-                            ping ${server} -c 3 && break 
-                        } || {
-                            sleep 60s 
-                        }
-                    done
-                    python3 bios/bios.py --ability common --server_ip ${server} --reboot true --attributes '{}'
-                    echo "Waiting for reboot"
-                    sleep 600s
-                    for i in {1..10}
-                    do
-                        {
-                            ping ${server} -c 3 && break 
-                        } || {
-                            sleep 120s 
-                        }
-                    done
-                 """
-              }
-
-             }
-
+                  stage(server){
+                     agent {label "vmware-190"}
+                     dir("scripts") {
+                                git credentialsId: 'Gitlab', url: 'git@172.16.1.249:appsoftware/scripts.git'
+                            }
+                     sh """
+                        cd scripts
+                        python3 bios/bios.py --ability reset --server_ip ${server} --reboot true
+                        echo "Waiting for reboot"
+                        sleep 240s
+                        for i in {1..20}
+                        do
+                            {
+                                ping ${server} -c 3 && break 
+                            } || {
+                                sleep 60s 
+                            }
+                        done
+                        python3 bios/bios.py --ability common --server_ip ${server} --reboot true --attributes '{}'
+                        echo "Waiting for reboot"
+                        sleep 600s
+                        for i in {1..10}
+                        do
+                            {
+                                ping ${server} -c 3 && break 
+                            } || {
+                                sleep 120s 
+                            }
+                        done
+                     """
+                  }
+    
+                 }   
+             }else{
+                 echo "no need to reset bios"
+             } 
           }
-          }
-      }
-       stage('tests') {
+         }
+       }   
+      stage('tests') {
          steps{
            script{
              def deploy_nodes = params.deploy_nodes.split(' ')
@@ -344,8 +375,14 @@ pipeline {
                 def dt=sh(script: 'date +"%Y-%m-%d"', returnStdout: true).trim()
                 stage(server_stage){
                   node(server) {
+                      echo "workloads: $workload on mode:$mode in $deploy_nodes"
                       sh '''
                         cpu_vendor=$(lscpu|grep "Model name:"|grep -v BIOS |awk -F ':' '{print $2}'|tr -s ' ')
+                        if [[ "\$cpu_vendor" =~ "8352Y" ]] || [[ "\$cpu_vendor" =~ "Kunpeng" ]]; then
+                           socket_spec="small"        
+                        else
+                           socket_spec="medium"
+                        fi
                         arch=$(uname -m)
                         echo 'never' > /sys/kernel/mm/transparent_hugepage/enabled
                         echo "-----------------------------------------"
@@ -411,13 +448,21 @@ pipeline {
                         if [ -e /opt/modules ]; then
                           rm -rf /opt/modules*
                           cd /opt
-                          wget -q http://10.1.180.190/bigdata/spark/postsillicon/$arch/modules.tar.gz
+                          wget -q http://10.1.180.190/bigdata/spark/postsillicon/$arch/$socket_spec/modules.tar.gz
                           tar -zxvf modules.tar.gz > /dev/null
                         else
                           cd /opt
-                          wget -q http://10.1.180.190/bigdata/spark/postsillicon/$arch/modules.tar.gz
+                          wget -q http://10.1.180.190/bigdata/spark/postsillicon/$arch/$socket_spec/modules.tar.gz
                           tar -zxvf modules.tar.gz > /dev/null
-                        fi   
+                        fi
+                        if [ -e /opt/scripts-master ]; then
+                          rm -rf /opt/scripts-master
+                        else
+                          echo "/opt/scripts-master not exits"
+                        fi
+                        cd /opt/
+                        wget -q http://10.1.180.190/bigdata/spark/postsillicon/scripts-master.tar.gz
+                        tar -zxvf scripts-master.tar.gz
                         echo "/opt/modules dir is prepared"
                         wget -q http://10.1.180.190/bigdata/node_exporter/$arch/node_exporter
                         mv node_exporter /usr/local/bin/
@@ -426,24 +471,27 @@ pipeline {
                         ''' 
                   }
                 }
-                stage('1socket-1task-1T'){
-                  node(server) {
-                          mount_onesocket_disk()
-                          echo "data dir is prepared"
-                          echo "deploy onesocket hadoop"
-                          prepareTestEnv("onesocket", true, true)
-                          runTests(1,1,1,'tpcds')
-                  }
+                if(params.mode=='single' || params.mode=='all'){
+                     stage('1socket-1task-1T'){
+                      node(server) {
+                              mount_onesocket_disk()
+                              echo "data dir is prepared"
+                              echo "deploy onesocket hadoop"
+                              prepareTestEnv("onesocket", true, true)
+                              runTests(1,1,1,params.workload)
+                      }
+                    }
                 }
-                stage('2socket-1task-1T'){
-                  node(server) {
-                        echo "---------------------------------------2socket-1task-1T------"
-                        mount_twosocket_disk()
-                        echo "data dir is prepared"
-                        echo "deploy 2socket-1task-1T hadoop"
-                        prepareTestEnv('twosocket', false, false)
-                        runTests(2,1,1,'tpcds')
-                  }
+                if(params.mode=='machine' || params.mode=='all'){
+                     stage('2socket-1task-1T'){
+                      node(server) {
+                            echo "---------------------------------------2socket-1task-1T------"
+                            mount_twosocket_disk()
+                            echo "data dir is prepared"
+                            echo "deploy 2socket-1task-1T hadoop"
+                            prepareTestEnv('twosocket', false, false)
+                            runTests(2,1,1,params.workload)
+                      }
                 }
                 stage('2socket-1task-2T'){
                       script{
@@ -454,7 +502,7 @@ pipeline {
                                 echo "data dir is prepared"
                                 echo "deploy 2socket-1task-2T hadoop"
                                 prepareTestEnv('twosocket', false, true)
-                                runTests(2,1,2,'tpcds')
+                                runTests(2,1,2,params.workload)
                           }
                         }catch(Exception e){
                           echo "running 2socket-1task-2T Error ${e.getMessage()}!"
@@ -470,13 +518,14 @@ pipeline {
                                 echo "data dir is prepared"
                                 echo "deploy 2socket-2task-1T hadoop"
                                 prepareTestEnv('twosocket', false, true)
-                                runTests(2,2,1,'tpcds')
+                                runTests(2,2,1,params.workload)
                                 sleep 30
                             }
                         }catch(Exception e){
                           echo "2socket-2task-1T execute error ${e.getMessage()}"    
                         }
                       }
+                }
                 }
                 stage('collect data to nas'){
                   node(server) {
@@ -485,6 +534,7 @@ pipeline {
                     current_ip=$(hostname -I|awk -F " " '{print $1}')
                     mkdir -p /nas/jerry.zhan/postsillicon/results/$dt_str/$current_ip
                     cp -r  /opt/modules/results  /nas/jerry.zhan/postsillicon/results/$dt_str/$current_ip
+                    cd /opt/scripts-master/os && python3 os_parameter.py && mv os_parameter.json  /nas/jerry.zhan/postsillicon/results/$dt_str/$current_ip
                     '''
                   }
                 }
