@@ -76,6 +76,7 @@ pipeline {
                         git credentialsId: 'Gitlab', url: 'git@gitlab.hj-micro.com:appsoftware/scripts.git'
                     }
                     sh '''
+                    yum install -y perf
                     rm -rf scripts/topdown/*.csv
                     '''
                     def runPathValue = sh(script: 'bash envprepare.sh | grep HPC_RUN_PATH= | cut -d = -f 2', returnStdout: true).trim()
