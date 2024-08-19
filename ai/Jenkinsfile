@@ -13,36 +13,8 @@ pipeline {
                 pip3 config set global.index-url https://mirrors.aliyun.com/pypi/simple
                 wget http://10.1.180.190/ai/postsilicon_test/post_silicon_requirement.txt
                 pip3 install -r post_silicon_requirement.txt
-                yum install -y openssl-devel bzip2-devel libffi-devel zlib-devel wget xz-devel
-                CMAKE_VERSION=3.26.0
-                CMAKE_TAR="v$CMAKE_VERSION.tar.gz"
-                CMAKE_BUILD_DIR="CMake-$CMAKE_VERSION"
-                source /opt/rh/gcc-toolset-10/enable
-                export CC=/opt/rh/gcc-toolset-10/root/usr/bin/gcc
-                export CXX=/opt/rh/gcc-toolset-10/root/usr/bin/g++
-                echo "Downloading CMake $CMAKE_VERSION..."
-                wget http://10.1.180.190/common/v$CMAKE_VERSION.tar.gz
-                tar -xzvf $CMAKE_TAR
-                cd $CMAKE_BUILD_DIR
-                ./configure
-                make -j
-                make install
-                cmake --version
-                cd ..
-                rm -rf $CMAKE_BUILD_DIR
-                rm v3.26.0.tar.gz
-                '''
-            }
-        }
-        stage('BuildOnnxRuntime') {
-            steps {
-                sh '''
                 wget http://10.1.180.190/ai/ONNXRUNTIME_v1.17.1.tar.gz
                 tar -xvf ONNXRUNTIME_v1.17.1.tar.gz
-                cd onnxruntime
-                source /opt/rh/gcc-toolset-10/enable
-                gcc --version
-                ./build.sh --config Release --build_shared_lib --parallel --allow_running_as_root --skip_tests
                 '''
             }
         }
