@@ -1,0 +1,24 @@
+CPI,Cycle_Accounting,1.4229,cycles / instructions,cycles:574005680907 instructions:403403486213
+IC ACCESS PKI,Cache_Effectiveness,270.3258,ic_tag_hit_miss.all_instruction_cache_accesses / instructions * 1000,ic_tag_hit_miss.all_instruction_cache_accesses:109224115894 instructions:404046162347
+IC ACCESS MPKI,Cache_Effectiveness,103.3107,ic_tag_hit_miss.instruction_cache_miss / instructions * 1000,ic_tag_hit_miss.instruction_cache_miss:42004805944 instructions:406586984724
+DC ACCESS PKI,Cache_Effectiveness,607.0750,all_data_cache_accesses / instructions * 1000,all_data_cache_accesses:247582871056 instructions:407829108806
+L2 Access PKI,Cache_Effectiveness,178.1030,(l2_request_g1.all_no_prefetch + l2_cache_hits_from_l2_hwpf + l2_pf_miss_l2_hit_l3 + l2_pf_miss_l2_l3) / instructions * 1000,l2_request_g1.all_no_prefetch:57659799754 l2_cache_hits_from_l2_hwpf:6073810616 l2_pf_miss_l2_hit_l3:7407188216 l2_pf_miss_l2_l3:1041155849 instructions:405281967631
+L2 Access from IC MPKI,Cache_Effectiveness,99.9302,l2_cache_accesses_from_ic_misses / instructions * 1000,l2_cache_accesses_from_ic_misses:40547507021 instructions:405758109944
+L2 Access from DC MPKI,Cache_Effectiveness,43.1115,l2_cache_accesses_from_dc_misses / instructions * 1000,l2_cache_accesses_from_dc_misses:17511218351 instructions:406184633974
+L2 Access from HWPF PKI,Cache_Effectiveness,36.0707,(l2_cache_hits_from_l2_hwpf + l2_pf_miss_l2_hit_l3 + l2_pf_miss_l2_l3) / instructions * 1000,l2_cache_hits_from_l2_hwpf:6122705827 l2_pf_miss_l2_hit_l3:7471340472 l2_pf_miss_l2_l3:1056051126 instructions:406149560185
+L2 Cache MPKI,Cache_Effectiveness,86.8176,(l2_cache_req_stat.ic_dc_miss_in_l2 + l2_pf_miss_l2_hit_l3 + l2_pf_miss_l2_l3) / instructions * 1000,l2_cache_req_stat.ic_dc_miss_in_l2:26771068620 l2_pf_miss_l2_hit_l3:7467303392 l2_pf_miss_l2_l3:1049956844 instructions:406465112295
+L2 Miss from IC MPKI,Cache_Effectiveness,46.5860,l2_cache_misses_from_ic_miss / instructions * 1000,l2_cache_misses_from_ic_miss:18802206745 instructions:403602018679
+L2 Miss from DC MPKI,Cache_Effectiveness,19.4593,l2_cache_misses_from_dc_misses / instructions * 1000,l2_cache_misses_from_dc_misses:7875144592 instructions:404698834791
+L2 Miss from HWPF MPKI,Cache_Effectiveness,20.9195,(l2_pf_miss_l2_hit_l3 + l2_pf_miss_l2_l3) / instructions * 1000,l2_pf_miss_l2_hit_l3:7434182216 l2_pf_miss_l2_l3:1046281995 instructions:405384994217
+L2 Hit PKI,Cache_Effectiveness,88.7143,(l2_cache_req_stat.ic_dc_hit_in_l2 + l2_cache_hits_from_l2_hwpf) / instructions * 1000,l2_cache_req_stat.ic_dc_hit_in_l2:29722009701 l2_cache_hits_from_l2_hwpf:6069948096 instructions:403451946848
+L2 Hit from IC Miss PKI,Cache_Effectiveness,53.2675,l2_cache_hits_from_ic_misses / instructions * 1000,l2_cache_hits_from_ic_misses:21485904595 instructions:403358246846
+L2 Hit from DC Miss PKI,Cache_Effectiveness,20.4771,l2_cache_hits_from_dc_misses / instructions * 1000,l2_cache_hits_from_dc_misses:8289220636 instructions:404804313780
+L2 Hit from HWPF PKI,Cache_Effectiveness,15.1069,l2_cache_hits_from_l2_hwpf / instructions * 1000,l2_cache_hits_from_l2_hwpf:6140838423 instructions:406492305863
+L1 ITLB MPKI,TLB_Effectiveness,3.7260,(bp_l1_tlb_miss_l2_tlb_hit + bp_l1_tlb_miss_l2_tlb_miss) / instructions * 1000,bp_l1_tlb_miss_l2_tlb_hit:1263984660 bp_l1_tlb_miss_l2_tlb_miss:253877781 instructions:407366988552
+L2 ITLB MPKI,TLB_Effectiveness,0.5744,l2_itlb_misses / instructions * 1000,l2_itlb_misses:233225448 instructions:406003440345
+L1 DTLB MPKI,TLB_Effectiveness,9.6618,l1_dtlb_misses / instructions * 1000,l1_dtlb_misses:3909775630 instructions:404664817139
+L2 DTLB MPKI,TLB_Effectiveness,1.8773,l2_dtlb_misses / instructions * 1000,l2_dtlb_misses:762875650 instructions:406369121775
+BRANCH MPKI,Branch_Effectiveness,7.9711,(1000 * ex_ret_brn_misp) / instructions,ex_ret_brn_misp:3245310781 instructions:407134505648
+BRANCH MISS RATE,Branch_Effectiveness,0.0419,ex_ret_brn_misp / ex_ret_brn,ex_ret_brn_misp:3226268037 ex_ret_brn:76954680707
+LL Cache MPKI,Cache_Effectiveness,0.0000,((l3_comb_clstr_state.request_miss / instructions) * 1000),l3_comb_clstr_state.request_miss:0 instructions:0
+LL Cache Miss Ratio,Cache_Effectiveness,0.0565,(l3_comb_clstr_state.request_miss / l3_request_g1.caching_l3_cache_accesses),l3_comb_clstr_state.request_miss:8313507756 l3_request_g1.caching_l3_cache_accesses:147161106740
