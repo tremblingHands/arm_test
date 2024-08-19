@@ -4,7 +4,7 @@
 EXEC_ROUND=5
 
 # Execution time in one round
-EXEC_TIME=5
+EXEC_TIME=120
 
 # Bind CPUS
 EXEC_CPUS="8-15,136-147"
