@@ -35,7 +35,7 @@ pipeline {
             steps {
                 sh '''
                 source /opt/rh/gcc-toolset-10/enable
-                git clone http:gitlab.hj-micro.com/ai/ai_model.git
+                git clone http://gitlab.hj-micro.com/ai/openblas.git
                 cd ai_model/GEMM
                 g++ -O3 gemm.cpp -I/opt/OpenBLAS/include/ -L/opt/OpenBLAS/lib -Wl,-rpath,/opt/OpenBLAS/lib -lopenblas -o gemm
                 chmod 777 gemmTest.sh
