@@ -41,9 +41,10 @@ check_env() {
 install_deppackages() {
   # Install mysql
   yum install -y mysql 
-
   # Install mysql lib
   yum install -y mysql-devel.aarch64 
+  # Install automake, libtool
+  yum install -y automake libtool
 }
 
 # Install sysbench 
