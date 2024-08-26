@@ -163,32 +163,32 @@ pipeline {
                 }
             }
         }
-        stage('CrossNUMA') {
-            steps {
-                node(server) {
-                    sh 'numactl -C 1,2 -m 1 redis-server redis/redis.conf --daemonize yes'
-                    sh '''
-                     cd /usr/local/bin/
-                     numactl -C 64-95 ./redis-benchmark -q -t SET -n 1000000 --threads 2
-                     numactl -C 64-95 ./redis-benchmark -q -t GET -n 1000000 --threads 2
-                     ./redis-cli shutdown
-                    '''
-                }
-            }
-        }
-        stage('CrossSocket') {
-            steps {
-                node(server) {
-                    sh 'numactl -C 1,2 -m 2 redis-server redis/redis.conf --daemonize yes'
-                    sh '''
-                        cd /usr/local/bin/
-                        numactl -C 64-95 ./redis-benchmark -q -t SET -n 1000000 --threads 2
-                        numactl -C 64-95 ./redis-benchmark -q -t GET -n 1000000 --threads 2
-                        ./redis-cli shutdown
-                    '''
-                }
-            }
-        }
+        // stage('CrossNUMA') {
+        //    steps {
+        //        node(server) {
+        //            sh 'numactl -C 1,2 -m 1 redis-server redis/redis.conf --daemonize yes'
+        //            sh '''
+        //             cd /usr/local/bin/
+        //             numactl -C 64-95 ./redis-benchmark -q -t SET -n 1000000 --threads 2
+        //             numactl -C 64-95 ./redis-benchmark -q -t GET -n 1000000 --threads 2
+        //             ./redis-cli shutdown
+        //            '''
+        //        }
+        //    }
+        // }
+        // stage('CrossSocket') {
+        //    steps {
+        //        node(server) {
+        //            sh 'numactl -C 1,2 -m 2 redis-server redis/redis.conf --daemonize yes'
+        //            sh '''
+        //                cd /usr/local/bin/
+        //                numactl -C 64-95 ./redis-benchmark -q -t SET -n 1000000 --threads 2
+        //                numactl -C 64-95 ./redis-benchmark -q -t GET -n 1000000 --threads 2
+        //                ./redis-cli shutdown
+        //            '''
+        //        }
+        //    }
+        // }
         stage('Cleanup') {
             steps {
                 node(server) {
@@ -388,32 +388,32 @@ pipeline {
                     ./mysql -h$DB_HOST -u$DB_USER -p$DB_PASS $DB_NAME -e \"$SQL_INSERT\"
 
                     # 跨NUMA SET性能入库
-                    LOG_FILTER=$(grep 'SET:' redis.log | grep 'p50' | awk 'NR==8')
-                    RPS=$(echo $LOG_FILTER | awk '{print $(NF-5)}')
-                    P50=$(echo $LOG_FILTER | sed -n 's/.*p50=\\([0-9.]*\\).*/\\1/p')
-                    SQL_INSERT="INSERT INTO naqu (test_case_id, RPS, P50, log_url) VALUES (24, ${RPS}, ${P50}, ${LOG_URL})"
-                    ./mysql -h$DB_HOST -u$DB_USER -p$DB_PASS $DB_NAME -e \"$SQL_INSERT\"
+                    # LOG_FILTER=$(grep 'SET:' redis.log | grep 'p50' | awk 'NR==8')
+                    # RPS=$(echo $LOG_FILTER | awk '{print $(NF-5)}')
+                    # P50=$(echo $LOG_FILTER | sed -n 's/.*p50=\\([0-9.]*\\).*/\\1/p')
+                    # SQL_INSERT="INSERT INTO naqu (test_case_id, RPS, P50, log_url) VALUES (24, ${RPS}, ${P50}, ${LOG_URL})"
+                    # ./mysql -h$DB_HOST -u$DB_USER -p$DB_PASS $DB_NAME -e \"$SQL_INSERT\"
 
                     # 跨NUMA GET性能入库
-                    LOG_FILTER=$(grep 'GET:' redis.log | grep 'p50' | awk 'NR==3')
-                    RPS=$(echo $LOG_FILTER | awk '{print $(NF-5)}')
-                    P50=$(echo $LOG_FILTER | sed -n 's/.*p50=\\([0-9.]*\\).*/\\1/p')
-                    SQL_INSERT="INSERT INTO naqu (test_case_id, RPS, P50, log_url) VALUES (25, ${RPS}, ${P50}, ${LOG_URL})"
-                    ./mysql -h$DB_HOST -u$DB_USER -p$DB_PASS $DB_NAME -e \"$SQL_INSERT\"
+                    # LOG_FILTER=$(grep 'GET:' redis.log | grep 'p50' | awk 'NR==3')
+                    # RPS=$(echo $LOG_FILTER | awk '{print $(NF-5)}')
+                    # P50=$(echo $LOG_FILTER | sed -n 's/.*p50=\\([0-9.]*\\).*/\\1/p')
+                    # SQL_INSERT="INSERT INTO naqu (test_case_id, RPS, P50, log_url) VALUES (25, ${RPS}, ${P50}, ${LOG_URL})"
+                    # ./mysql -h$DB_HOST -u$DB_USER -p$DB_PASS $DB_NAME -e \"$SQL_INSERT\"
 
                     # 跨Socket SET性能入库
-                    LOG_FILTER=$(grep 'SET:' redis.log | grep 'p50' | awk 'NR==9')
-                    RPS=$(echo $LOG_FILTER | awk '{print $(NF-5)}')
-                    P50=$(echo $LOG_FILTER | sed -n 's/.*p50=\\([0-9.]*\\).*/\\1/p')
-                    SQL_INSERT="INSERT INTO naqu (test_case_id, RPS, P50, log_url) VALUES (26, ${RPS}, ${P50}, ${LOG_URL})"
-                    ./mysql -h$DB_HOST -u$DB_USER -p$DB_PASS $DB_NAME -e \"$SQL_INSERT\"
+                    # LOG_FILTER=$(grep 'SET:' redis.log | grep 'p50' | awk 'NR==9')
+                    # RPS=$(echo $LOG_FILTER | awk '{print $(NF-5)}')
+                    # P50=$(echo $LOG_FILTER | sed -n 's/.*p50=\\([0-9.]*\\).*/\\1/p')
+                    # SQL_INSERT="INSERT INTO naqu (test_case_id, RPS, P50, log_url) VALUES (26, ${RPS}, ${P50}, ${LOG_URL})"
+                    # ./mysql -h$DB_HOST -u$DB_USER -p$DB_PASS $DB_NAME -e \"$SQL_INSERT\"
 
                     # 跨Socket GET性能入库
-                    LOG_FILTER=$(grep 'GET:' redis.log | grep 'p50' | awk 'NR==4')
-                    RPS=$(echo $LOG_FILTER | awk '{print $(NF-5)}')
-                    P50=$(echo $LOG_FILTER | sed -n 's/.*p50=\\([0-9.]*\\).*/\\1/p')
-                    SQL_INSERT="INSERT INTO naqu (test_case_id, RPS, P50, log_url) VALUES (27, ${RPS}, ${P50}, ${LOG_URL})"
-                    ./mysql -h$DB_HOST -u$DB_USER -p$DB_PASS $DB_NAME -e \"$SQL_INSERT\"
+                    # LOG_FILTER=$(grep 'GET:' redis.log | grep 'p50' | awk 'NR==4')
+                    # RPS=$(echo $LOG_FILTER | awk '{print $(NF-5)}')
+                    # P50=$(echo $LOG_FILTER | sed -n 's/.*p50=\\([0-9.]*\\).*/\\1/p')
+                    # SQL_INSERT="INSERT INTO naqu (test_case_id, RPS, P50, log_url) VALUES (27, ${RPS}, ${P50}, ${LOG_URL})"
+                    # ./mysql -h$DB_HOST -u$DB_USER -p$DB_PASS $DB_NAME -e \"$SQL_INSERT\"
 
                     # 关闭连接
                     ./mysql -h$DB_HOST -u$DB_USER -p$DB_PASS $DB_NAME -e "exit"
