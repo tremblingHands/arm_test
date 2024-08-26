@@ -105,6 +105,7 @@
 					}
 				}
 			}
+/*
 			stage('跨NUMA启动memcached') {
 				agent {label "${server_node}"} 
 					steps {
@@ -214,6 +215,7 @@
 					}
 				}
 			}
+*/
 		}
 		post {
 			success {
@@ -242,15 +244,20 @@
 						
 						# 性能数据入库
 						test_case_id=22
+/*
 						for i in {7..10}
 						do
 							OPS=$(grep -A 8 AVERA /tmp/perf_test_${i}.log|grep Totals|awk '{print $2}')
 							LAT=$(grep -A 8 AVERA /tmp/perf_test_${i}.log|grep Totals|awk '{print $5}')
-							SQL_INSERT="INSERT INTO naqu (test_case_id, OPS_OR_UT, AVG_Latency, log_url) VALUES (${test_case_id}, ${OPS}, ${LAT}, ${LOG_URL})"
+							SQL_INSERT="INSERT INTO ${cpuname} (test_case_id, OPS_OR_UT, AVG_Latency, log_url) VALUES (${test_case_id}, ${OPS}, ${LAT}, ${LOG_URL})"
 							mysql -h$DB_HOST -u$DB_USER -p$DB_PASS $DB_NAME -e \"$SQL_INSERT\"
 							let test_case_id++
 						done
-						
+*/
+						OPS=$(grep -A 8 AVERA /tmp/perf_test_7.log|grep Totals|awk '{print $2}')
+						LAT=$(grep -A 8 AVERA /tmp/perf_test_7.log|grep Totals|awk '{print $5}')
+						SQL_INSERT="INSERT INTO ${cpuname} (test_case_id, OPS_OR_UT, AVG_Latency, log_url) VALUES (${test_case_id}, ${OPS}, ${LAT}, ${LOG_URL})"
+						mysql -h$DB_HOST -u$DB_USER -p$DB_PASS $DB_NAME -e \"$SQL_INSERT\"
 						# 关闭连接
 						mysql -h$DB_HOST -u$DB_USER -p$DB_PASS $DB_NAME -e "exit"
 						
